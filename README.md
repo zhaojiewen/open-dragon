@@ -28,16 +28,6 @@ npm install -g opendragon
 dragon
 ```
 
-### 从GitHub Release下载
-
-1. 访问 [Releases](https://github.com/zhaojiewen/open-dragon/releases) 页面
-2. 下载最新版本的 `dragon.js`
-3. 运行：
-
-```bash
-chmod +x dragon.js
-./dragon.js
-```
 
 ### 从源码构建
 
