@@ -1,95 +1,74 @@
-# Dragon - Multi-Provider AI CLI
+# 🐉 Dragon - Multi-Provider AI CLI
+
+[![npm version](https://badge.fury.io/js/opendragon.svg)](https://www.npmjs.com/package/opendragon)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js Version](https://img.shields.io/node/v/opendragon.svg)](https://nodejs.org/)
 
 A powerful command-line tool that supports multiple AI providers, inspired by Claude Code.
 
-## Features
+**完全复制Claude Code CLI功能，但能配置其他AI智能体账号**
 
-- **Multi-Provider Support**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, and Chinese LLMs (Qwen, Moonshot, Yi, Doubao)
-- **REPL Interface**: Interactive chat with streaming responses
-- **Tool System**: Execute commands, read/write files, search code, and more
-- **Agent Support**: Spawn sub-agents for complex tasks
-- **Configurable**: Easy configuration for multiple API keys
+## ✨ Features
 
-## Installation
+- 🔄 **Multi-Provider Support**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, and Chinese LLMs
+- 💬 **REPL Interface**: Interactive chat with streaming responses
+- 🛠️ **Tool System**: Execute commands, read/write files, search code, and more
+- 🤖 **Agent Support**: Spawn sub-agents for complex tasks
+- ⚙️ **Configurable**: Easy configuration for multiple API keys
+- 📦 **Zero Dependencies**: Single file distribution available
 
-### 方式一：npm安装（推荐）
+## 📦 Installation
+
+### npm（推荐）
 
 ```bash
-# 从npm安装
 npm install -g opendragon
 
 # 运行
 dragon
 ```
 
-### 方式二：从源码安装
+### 从GitHub Release下载
+
+1. 访问 [Releases](https://github.com/zhaojiewen/open-dragon/releases) 页面
+2. 下载最新版本的 `dragon.js`
+3. 运行：
 
 ```bash
-# Clone and build
-git clone <repo-url>
-cd OpenDragon
+chmod +x dragon.js
+./dragon.js
+```
+
+### 从源码构建
+
+```bash
+git clone https://github.com/zhaojiewen/open-dragon.git
+cd open-dragon
 npm install
 npm run build
 npm link
 ```
 
-### 方式三：单文件打包
+## 🚀 Quick Start
 
 ```bash
-# 安装依赖
-npm install
-
-# 打包成单文件
-npm run bundle
-
-# 生成的文件在 dist/dragon.js，可以直接运行
-node dist/dragon.js
-
-# 或复制到任何位置
-cp dist/dragon.js /usr/local/bin/dragon
-chmod +x /usr/local/bin/dragon
-```
-
-### 方式四：Homebrew（macOS）
-
-创建 Homebrew Formula：
-
-```ruby
-class Opendragon < Formula
-  desc "Multi-provider AI CLI tool"
-  homepage "https://github.com/yourname/opendragon"
-  url "https://registry.npmjs.org/opendragon/-/opendragon-1.0.0.tgz"
-  sha256 "..."
-  license "MIT"
-
-  depends_on "node"
-
-  def install
-    system "npm", "install", *std_npm_args
-    bin.install_symlink libexec/"bin/dragon"
-  end
-end
-```
-
-## Quick Start
-
-```bash
-# Initialize configuration
+# 1. 初始化配置
 dragon init
 
-# Edit config file to add your API keys
-# Config location: ~/.dragon/config.json
+# 2. 编辑配置文件添加API密钥
+# 配置文件位置: ~/.dragon/config.json
+vim ~/.dragon/config.json
 
-# Start interactive chat
+# 3. 启动交互式聊天
 dragon
 
-# Or specify a provider
-dragon chat --provider openai
+# 或指定提供商
+dragon chat --provider openai --model gpt-4o
 ```
 
-## Configuration
+## ⚙️ Configuration
 
-Configuration file is located at `~/.dragon/config.json`:
+配置文件位于 `~/.dragon/config.json`：
 
 ```json
 {
@@ -123,59 +102,71 @@ Configuration file is located at `~/.dragon/config.json`:
     }
   },
   "tools": {
-    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "agent"],
-    "bash": {
-      "dangerouslyDisableSandbox": false
-    }
+    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "agent"]
   }
 }
 ```
 
-## CLI Commands
+## 📝 CLI Commands
 
-```bash
-dragon              # Start REPL (default)
-dragon init         # Initialize config file
-dragon config       # Show config location
-dragon chat         # Start interactive chat
-dragon --help       # Show help
-dragon --version    # Show version
-```
+| Command | Description |
+|---------|-------------|
+| `dragon` | 启动REPL（默认） |
+| `dragon init` | 初始化配置文件 |
+| `dragon config` | 显示配置文件位置 |
+| `dragon chat` | 启动交互式聊天 |
+| `dragon --help` | 显示帮助 |
+| `dragon --version` | 显示版本 |
 
-## REPL Commands
+## 💻 REPL Commands
 
-Once in the REPL, you can use these commands:
+进入REPL后可用的命令：
 
-- `/help` - Show available commands
-- `/clear` - Clear conversation history
-- `/history` - Show conversation history
-- `/provider` - Show current provider
-- `/model` - Show or change model
-- `/tools` - List available tools
-- `/exit` - Exit the REPL
+| Command | Description |
+|---------|-------------|
+| `/help` | 显示可用命令 |
+| `/clear` | 清空对话历史 |
+| `/history` | 显示对话历史 |
+| `/provider` | 显示当前提供商 |
+| `/model` | 显示或切换模型 |
+| `/tools` | 列出可用工具 |
+| `/exit` | 退出REPL |
 
-## Available Tools
+## 🔧 Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `bash` | Execute shell commands |
-| `read` | Read file contents |
-| `write` | Write to files |
-| `edit` | Edit files with string replacement |
-| `glob` | Find files by pattern |
-| `grep` | Search content in files |
-| `webfetch` | Fetch web page content |
-| `websearch` | Search the web (requires API config) |
-| `agent` | Spawn sub-agent for tasks |
+| `bash` | 执行Shell命令 |
+| `read` | 读取文件内容 |
+| `write` | 写入文件 |
+| `edit` | 编辑文件（字符串替换） |
+| `glob` | 按模式查找文件 |
+| `grep` | 搜索文件内容 |
+| `webfetch` | 抓取网页内容 |
+| `websearch` | 网络搜索（需配置API） |
+| `agent` | 启动子代理执行任务 |
 
-## Adding New Providers
+## 🌐 Supported Providers
 
-You can add any OpenAI-compatible API as a provider:
+| Provider | Models |
+|----------|--------|
+| OpenAI | gpt-4o, gpt-4-turbo, gpt-3.5-turbo |
+| Anthropic | claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5 |
+| Google Gemini | gemini-1.5-pro, gemini-1.5-flash |
+| DeepSeek | deepseek-chat, deepseek-reasoner |
+| 通义千问 (Qwen) | qwen-max, qwen-plus, qwen-turbo |
+| 月之暗面 (Moonshot) | moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k |
+| 零一万物 (Yi) | yi-lightning, yi-large, yi-medium |
+| 豆包 (Doubao) | doubao-pro-4k, doubao-pro-32k, doubao-pro-128k |
+
+## ➕ Adding Custom Providers
+
+支持任何OpenAI兼容的API：
 
 ```json
 {
   "providers": {
-    "custom-llm": {
+    "my-custom-llm": {
       "apiKey": "YOUR_API_KEY",
       "baseUrl": "https://api.example.com/v1",
       "models": ["model-1", "model-2"],
@@ -185,32 +176,48 @@ You can add any OpenAI-compatible API as a provider:
 }
 ```
 
-## Supported Providers
-
-| Provider | Default Models |
-|----------|----------------|
-| OpenAI | gpt-4o, gpt-4-turbo, gpt-3.5-turbo |
-| Anthropic | claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5 |
-| Google Gemini | gemini-1.5-pro, gemini-1.5-flash |
-| DeepSeek | deepseek-chat, deepseek-reasoner |
-| Qwen (通义千问) | qwen-max, qwen-plus, qwen-turbo |
-| Moonshot (月之暗面) | moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k |
-| Yi (零一万物) | yi-lightning, yi-large, yi-medium |
-| Doubao (豆包) | doubao-pro-4k, doubao-pro-32k, doubao-pro-128k |
-
-## 发布新版本
+## 📋 Development
 
 ```bash
-# 更新版本号
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 开发模式
+npm run dev
+
+# 打包成单文件
+npm run bundle
+```
+
+## 🔄 Release Process
+
+```bash
+# 更新版本
 npm version patch  # 或 minor / major
 
 # 发布到npm
 npm publish
 
-# 或使用GitHub Release
-# 在GitHub上创建新Release，上传打包后的文件
+# 创建Git标签并推送
+git tag v1.0.0
+git push origin --tags
 ```
 
-## License
+然后在GitHub上创建Release，上传打包后的文件。
 
-MIT
+## 📄 License
+
+[MIT](LICENSE)
+
+## 🤝 Contributing
+
+欢迎提交Issue和Pull Request！
+
+## 📮 Links
+
+- [GitHub Repository](https://github.com/zhaojiewen/open-dragon)
+- [npm Package](https://www.npmjs.com/package/opendragon)
+- [Report Bug](https://github.com/zhaojiewen/open-dragon/issues)
