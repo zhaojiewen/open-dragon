@@ -11,9 +11,19 @@
     "bundle": "esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/dragon.js --banner:js=\"#!/usr/bin/env node\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src/**/*.ts"
   },
-  "keywords": ["ai", "cli", "openai", "anthropic", "gemini", "deepseek"],
+  "keywords": [
+    "ai",
+    "cli",
+    "openai",
+    "anthropic",
+    "gemini",
+    "deepseek"
+  ],
   "author": "Xu Haiqing",
   "license": "MIT",
   "type": "module",
@@ -36,7 +46,10 @@
   "devDependencies": {
     "@types/figlet": "^1.5.0",
     "@types/node": "^22.14.0",
+    "@vitest/coverage-v8": "^4.1.5",
+    "@vitest/ui": "^4.1.5",
     "esbuild": "^0.25.2",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.5"
   }
 }

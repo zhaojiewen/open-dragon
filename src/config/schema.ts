@@ -16,10 +16,19 @@ export const ToolsConfigSchema = z.object({
   bash: BashToolConfigSchema.optional(),
 });
 
+export const LogConfigSchema = z.object({
+  level: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  logFile: z.string().optional(),
+  enableConsole: z.boolean().default(true),
+});
+
+export type LogConfig = z.infer<typeof LogConfigSchema>;
+
 export const DragonConfigSchema = z.object({
   defaultProvider: z.string().default('anthropic'),
   providers: z.record(z.string(), ProviderConfigSchema).default({}),
   tools: ToolsConfigSchema.optional(),
+  logging: LogConfigSchema.optional(),
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -56,5 +65,9 @@ export const DEFAULT_CONFIG: DragonConfig = {
     bash: {
       dangerouslyDisableSandbox: false,
     },
+  },
+  logging: {
+    level: 'info',
+    enableConsole: true,
   },
 };

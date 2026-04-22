@@ -33,6 +33,7 @@ ehthumbs.db
 # Test
 coverage/
 .nyc_output/
+.vitest/
 
 # Temporary files
 *.tmp
@@ -46,3 +47,10 @@ coverage/
 # Config with secrets (users should create their own)
 # Keep template but ignore actual config with API keys
 # .dragon/config.json  <- not ignored, users need it
+
+# Encryption key file
+.dragon/.key
+
+# Test artifacts
+test-results/
+.playwright/

@@ -8,6 +8,11 @@ import {
   StreamChunk,
   ToolCall,
 } from './base.js';
+import { ProviderError, ApiKeyMissingError, ApiRequestError, ApiRateLimitError, ErrorCode } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
+import { perfMonitor } from '../performance/index.js';
+
+const logger = getLogger();
 
 export class AnthropicProvider extends BaseProvider {
   readonly name = 'anthropic';
@@ -24,6 +29,11 @@ export class AnthropicProvider extends BaseProvider {
     defaultModel?: string;
   }) {
     super();
+
+    if (!config.apiKey || config.apiKey === 'YOUR_ANTHROPIC_API_KEY') {
+      throw new ApiKeyMissingError('anthropic');
+    }
+
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl;
     this.models = config.models || ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'];
@@ -56,32 +66,42 @@ export class AnthropicProvider extends BaseProvider {
       }));
     }
 
-    const response = await this.client.messages.create(requestParams);
+    try {
+      logger.debug(`Sending chat request to Anthropic API (model: ${requestParams.model})`);
+      
+      const response = await perfMonitor.measure('anthropic:chat', () =>
+        this.client.messages.create(requestParams)
+      );
 
-    const toolCalls: ToolCall[] = [];
-    let textContent = '';
+      const toolCalls: ToolCall[] = [];
+      let textContent = '';
 
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        textContent += block.text;
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({
-          id: block.id,
-          name: block.name,
-          arguments: block.input as Record<string, unknown>,
-        });
+      for (const block of response.content) {
+        if (block.type === 'text') {
+          textContent += block.text;
+        } else if (block.type === 'tool_use') {
+          toolCalls.push({
+            id: block.id,
+            name: block.name,
+            arguments: block.input as Record<string, unknown>,
+          });
+        }
       }
-    }
 
-    return {
-      content: textContent,
-      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-      stopReason: response.stop_reason as 'end_turn' | 'tool_use' | 'max_tokens',
-      usage: {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-      },
-    };
+      logger.debug(`Chat completed (tokens: ${response.usage.input_tokens} in, ${response.usage.output_tokens} out)`);
+
+      return {
+        content: textContent,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        stopReason: response.stop_reason as 'end_turn' | 'tool_use' | 'max_tokens',
+        usage: {
+          inputTokens: response.usage.input_tokens,
+          outputTokens: response.usage.output_tokens,
+        },
+      };
+    } catch (error: any) {
+      this.handleError(error);
+    }
   }
 
   async *stream(
@@ -107,59 +127,94 @@ export class AnthropicProvider extends BaseProvider {
       }));
     }
 
-    // Use the messages API correctly with streaming
-    const stream = this.client.messages.stream(requestParams);
+    try {
+      logger.debug(`Starting stream to Anthropic API (model: ${requestParams.model})`);
+      
+      // Use the messages API correctly with streaming
+      const stream = this.client.messages.stream(requestParams);
 
-    // Track tool calls during streaming
-    const pendingToolCalls: Map<number, { id: string; name: string; jsonBuffer: string }> = new Map();
+      // Track tool calls during streaming
+      const pendingToolCalls: Map<number, { id: string; name: string; jsonBuffer: string }> = new Map();
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_start') {
-        if (event.content_block.type === 'tool_use') {
-          pendingToolCalls.set(event.index, {
-            id: event.content_block.id,
-            name: event.content_block.name,
-            jsonBuffer: '',
-          });
-        }
-      } else if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          yield { type: 'text', text: event.delta.text };
-        } else if (event.delta.type === 'input_json_delta') {
+      for await (const event of stream) {
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'tool_use') {
+            pendingToolCalls.set(event.index, {
+              id: event.content_block.id,
+              name: event.content_block.name,
+              jsonBuffer: '',
+            });
+          }
+        } else if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'text_delta') {
+            yield { type: 'text', text: event.delta.text };
+          } else if (event.delta.type === 'input_json_delta') {
+            const pending = pendingToolCalls.get(event.index);
+            if (pending) {
+              pending.jsonBuffer += event.delta.partial_json || '';
+            }
+          }
+        } else if (event.type === 'content_block_stop') {
           const pending = pendingToolCalls.get(event.index);
           if (pending) {
-            pending.jsonBuffer += event.delta.partial_json || '';
-          }
-        }
-      } else if (event.type === 'content_block_stop') {
-        const pending = pendingToolCalls.get(event.index);
-        if (pending) {
-          try {
-            const args = JSON.parse(pending.jsonBuffer);
-            yield {
-              type: 'tool_use',
-              toolCall: {
-                id: pending.id,
-                name: pending.name,
-                arguments: args,
-              },
-              isComplete: true,
-            };
-          } catch (e) {
-            // If JSON parse fails, yield empty args
-            yield {
-              type: 'tool_use',
-              toolCall: {
-                id: pending.id,
-                name: pending.name,
-                arguments: {},
-              },
-              isComplete: true,
-            };
+            try {
+              const args = JSON.parse(pending.jsonBuffer);
+              yield {
+                type: 'tool_use',
+                toolCall: {
+                  id: pending.id,
+                  name: pending.name,
+                  arguments: args,
+                },
+                isComplete: true,
+              };
+            } catch (e) {
+              // If JSON parse fails, yield empty args
+              yield {
+                type: 'tool_use',
+                toolCall: {
+                  id: pending.id,
+                  name: pending.name,
+                  arguments: {},
+                },
+                isComplete: true,
+              };
+            }
           }
         }
       }
+      
+      logger.debug('Stream completed successfully');
+    } catch (error: any) {
+      this.handleError(error);
     }
+  }
+
+  /**
+   * Handle API errors with appropriate error types
+   */
+  private handleError(error: any): never {
+    if (error.status === 401) {
+      throw new ApiKeyMissingError('anthropic');
+    }
+
+    if (error.status === 429) {
+      const retryAfter = error.headers?.['retry-after'];
+      throw new ApiRateLimitError(
+        'anthropic',
+        retryAfter ? parseInt(retryAfter) : undefined
+      );
+    }
+
+    if (error.error?.type === 'authentication_error') {
+      throw new ApiKeyMissingError('anthropic');
+    }
+
+    throw new ApiRequestError(
+      `Anthropic API error: ${error.message || 'Unknown error'}`,
+      'anthropic',
+      { originalError: error }
+    );
   }
 
   private formatMessages(

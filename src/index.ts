@@ -3,10 +3,19 @@
 import { program } from 'commander';
 import { startRepl } from './repl.js';
 import { loadConfig, initConfig } from './config/index.js';
+import { encryptionService } from './encryption/index.js';
+import { getLogger, LogLevel } from './utils/logger.js';
 import chalk from 'chalk';
 import figlet from 'figlet';
 
 const VERSION = '1.0.0';
+const logger = getLogger();
+
+// Handle environment variables
+if (process.env.DRAGON_DEBUG === 'true') {
+  logger.setLevel(LogLevel.DEBUG);
+  logger.debug('Debug mode enabled');
+}
 
 program
   .name('dragon')
@@ -17,10 +26,28 @@ program
   .command('init')
   .description('Initialize configuration file')
   .option('-f, --force', 'Force overwrite existing config')
+  .option('-e, --encrypt', 'Encrypt sensitive fields in config')
+  .option('-p, --password <password>', 'Password for encryption (optional)')
   .action(async (options) => {
-    await initConfig(options.force);
-    console.log(chalk.green('✓ Configuration initialized!'));
-    console.log(chalk.dim('Edit ~/.dragon/config.json to add your API keys'));
+    try {
+      // Initialize encryption if requested
+      if (options.encrypt) {
+        await encryptionService.initialize(options.password);
+        logger.info('Encryption enabled for sensitive fields');
+      }
+
+      await initConfig(options.force, options.encrypt);
+      console.log(chalk.green('✓ Configuration initialized!'));
+      
+      if (options.encrypt) {
+        console.log(chalk.dim('Note: API keys will be encrypted. Keep your password safe!'));
+      } else {
+        console.log(chalk.dim('Edit ~/.dragon/config.json to add your API keys'));
+      }
+    } catch (error: any) {
+      logger.error('Failed to initialize config', error);
+      process.exit(1);
+    }
   });
 
 program

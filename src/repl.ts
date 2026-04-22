@@ -4,10 +4,17 @@ import { loadConfig, DragonConfig } from './config/index.js';
 import { createProvider, AIProvider } from './providers/index.js';
 import { ToolRegistry, createToolRegistry } from './tools/index.js';
 import { Message, AIResponse, ToolCall } from './providers/base.js';
+import { DragonError, ConfigError, wrapError } from './utils/errors.js';
+import { getLogger } from './utils/logger.js';
+import { perfMonitor } from './performance/index.js';
+
+const logger = getLogger();
 
 interface ReplOptions {
   provider?: string;
   model?: string;
+  enableMonitoring?: boolean;
+  enableEncryption?: boolean;
 }
 
 export async function startRepl(options: ReplOptions = {}): Promise<void> {
@@ -16,10 +23,23 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
   let toolRegistry: ToolRegistry;
   let messages: Message[] = [];
 
+  // Enable performance monitoring if requested
+  if (options.enableMonitoring) {
+    perfMonitor.setEnabled(true);
+    logger.info('Performance monitoring enabled');
+  }
+
   try {
-    config = await loadConfig();
+    logger.time('config-load');
+    config = await loadConfig(options.enableEncryption);
+    logger.timeEnd('config-load');
+
     const providerName = options.provider || config.defaultProvider;
+    
+    logger.time('provider-init');
     provider = createProvider(providerName, config);
+    logger.timeEnd('provider-init');
+    
     toolRegistry = createToolRegistry(process.cwd());
     toolRegistry.setProvider(provider);
 
@@ -29,7 +49,13 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
     console.log(chalk.dim('Type your message and press Enter. Type /help for commands.'));
     console.log();
   } catch (error: any) {
-    console.error(chalk.red('Failed to initialize:'), error.message);
+    const wrappedError = wrapError(error, 'Initialization failed');
+    logger.error('Failed to initialize', error);
+    
+    if (wrappedError instanceof ConfigError) {
+      console.log(chalk.yellow('No configuration found. Run `dragon init` first.'));
+    }
+    
     process.exit(1);
   }
 
@@ -130,6 +156,9 @@ async function handleChat(
     const toolCalls: ToolCall[] = [];
 
     try {
+      // Measure streaming performance
+      const streamStartTime = performance.now();
+      
       for await (const chunk of provider.stream(currentMessages, tools, { model })) {
         if (chunk.type === 'text' && chunk.text) {
           process.stdout.write(chunk.text);
@@ -138,7 +167,12 @@ async function handleChat(
           toolCalls.push(chunk.toolCall as ToolCall);
         }
       }
+      
+      const streamDuration = performance.now() - streamStartTime;
+      logger.debug(`Stream completed in ${streamDuration.toFixed(2)}ms`);
+      
     } catch (error: any) {
+      logger.error('Stream error', error);
       throw error;
     }
 
@@ -177,7 +211,10 @@ async function handleChat(
       for (const tc of toolCalls) {
         console.log(chalk.blue(`  → ${tc.name}`));
 
+        // Measure tool execution performance
+        perfMonitor.startTimer(`tool:${tc.name}`);
         const result = await toolRegistry.executeToolCall(tc);
+        perfMonitor.endTimer(`tool:${tc.name}`);
 
         if (result.success) {
           console.log(chalk.green(`  ✓ ${tc.name} completed`));
@@ -224,6 +261,9 @@ async function handleCommand(
       console.log('  /provider   - Show current provider');
       console.log('  /model      - Show or change model');
       console.log('  /tools      - List available tools');
+      console.log('  /perf       - Show performance report');
+      console.log('  /debug      - Toggle debug mode (on/off)');
+      console.log('  /encrypt    - Show encryption info');
       console.log('  /exit       - Exit the REPL');
       return true;
 
@@ -263,6 +303,32 @@ async function handleCommand(
       tools.forEach(tool => {
         console.log(`  ${chalk.blue(tool.name)}: ${tool.description}`);
       });
+      return true;
+
+    case 'perf':
+    case 'performance':
+      if (perfMonitor.isEnabled()) {
+        perfMonitor.printReport();
+      } else {
+        console.log(chalk.dim('Performance monitoring is disabled. Start with --monitor flag.'));
+      }
+      return true;
+
+    case 'debug':
+      const isDebugEnabled = logger['_level'] === 0; // LogLevel.DEBUG
+      if (args[0] === 'on') {
+        logger.setLevel(0); // LogLevel.DEBUG
+        console.log(chalk.green('Debug mode enabled'));
+      } else if (args[0] === 'off') {
+        logger.setLevel(1); // LogLevel.INFO
+        console.log(chalk.dim('Debug mode disabled'));
+      } else {
+        console.log(chalk.dim(`Debug mode: ${isDebugEnabled ? 'ON' : 'OFF'}`));
+      }
+      return true;
+
+    case 'encrypt':
+      console.log(chalk.yellow('To enable encryption, run: dragon init --encrypt'));
       return true;
 
     case 'exit':
