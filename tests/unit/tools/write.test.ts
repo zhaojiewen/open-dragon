@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WriteTool } from '../../../src/tools/write.js';
 import fs from 'fs';
 import path from 'path';
@@ -15,6 +15,7 @@ describe('WriteTool', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('should have correct name and description', () => {
@@ -106,5 +107,24 @@ describe('WriteTool', () => {
 
     expect(result.success).toBe(true);
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('');
+  });
+
+  it('should handle write errors gracefully', async () => {
+    const filePath = path.join(tempDir, 'error.txt');
+
+    // Mock fs.writeFileSync to throw an error
+    const writeFileSyncSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('Disk full');
+    });
+
+    const result = await writeTool.execute({
+      file_path: filePath,
+      content: 'test',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Disk full');
+
+    writeFileSyncSpy.mockRestore();
   });
 });

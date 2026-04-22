@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EditTool } from '../../../src/tools/edit.js';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +17,7 @@ describe('EditTool', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('should have correct name and description', () => {
@@ -112,5 +113,25 @@ describe('EditTool', () => {
     await expect(
       editTool.execute({ file_path: testFile })
     ).rejects.toThrow('Invalid parameters');
+  });
+
+  it('should handle edit errors gracefully', async () => {
+    fs.writeFileSync(testFile, 'Hello world');
+
+    // Mock fs.writeFileSync to throw an error after reading
+    const writeFileSyncSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
+      throw new Error('Read-only file system');
+    });
+
+    const result = await editTool.execute({
+      file_path: testFile,
+      old_string: 'world',
+      new_string: 'universe',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Read-only file system');
+
+    writeFileSyncSpy.mockRestore();
   });
 });

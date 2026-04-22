@@ -209,6 +209,11 @@ export class SecureConfigManager {
       return config;
     }
 
+    // Handle arrays
+    if (Array.isArray(config)) {
+      return config.map(item => this.encryptConfig(item));
+    }
+
     const encrypted = { ...config };
 
     for (const key of Object.keys(encrypted)) {
@@ -228,6 +233,11 @@ export class SecureConfigManager {
   decryptConfig(config: Record<string, any>): Record<string, any> {
     if (!this.encryption.isInitialized()) {
       return config;
+    }
+
+    // Handle arrays
+    if (Array.isArray(config)) {
+      return config.map(item => this.decryptConfig(item));
     }
 
     const decrypted = { ...config };

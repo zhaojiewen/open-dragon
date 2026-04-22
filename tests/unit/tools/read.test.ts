@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ReadTool } from '../../../src/tools/read.js';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +17,7 @@ describe('ReadTool', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
   });
 
   it('should have correct name and description', () => {
@@ -95,5 +96,21 @@ describe('ReadTool', () => {
     await expect(
       readTool.execute({})
     ).rejects.toThrow('Invalid parameters');
+  });
+
+  it('should handle read errors gracefully', async () => {
+    fs.writeFileSync(testFile, 'test content');
+
+    // Mock fs.readFileSync to throw an error
+    const readFileSyncSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw new Error('Permission denied');
+    });
+
+    const result = await readTool.execute({ file_path: testFile });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Permission denied');
+
+    readFileSyncSpy.mockRestore();
   });
 });

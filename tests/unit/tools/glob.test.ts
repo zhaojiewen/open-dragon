@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GlobTool } from '../../../src/tools/glob.js';
 import fs from 'fs';
 import path from 'path';
@@ -80,5 +80,32 @@ describe('GlobTool', () => {
 
   it('should validate required parameters', async () => {
     await expect(globTool.execute({})).rejects.toThrow('Invalid parameters');
+  });
+
+  it('should handle invalid path gracefully', async () => {
+    const result = await globTool.execute({
+      pattern: '*.txt',
+      path: '/nonexistent/path/that/does/not/exist',
+    });
+
+    // glob library might return empty or error depending on system
+    // Just check that it doesn't throw
+    expect(result).toBeDefined();
+    expect(result.success).toBeDefined();
+  });
+
+  it('should use process.cwd() when no path or context provided', async () => {
+    // Create a file in current directory
+    const originalCwd = process.cwd();
+    process.chdir(tempDir);
+    fs.writeFileSync(path.join(tempDir, 'cwd-test.txt'), '');
+
+    try {
+      const result = await globTool.execute({ pattern: 'cwd-test.txt' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('cwd-test.txt');
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });

@@ -63,6 +63,9 @@ class PerformanceMonitor {
     metric.endTime = performance.now();
     metric.duration = metric.endTime - metric.startTime;
 
+    // Remove the timer after ending
+    this.metrics.delete(name);
+
     this.logger.debug(`Timer ended: ${name}`, {
       durationMs: metric.duration.toFixed(2),
       durationSec: (metric.duration / 1000).toFixed(3),

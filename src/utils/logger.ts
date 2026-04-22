@@ -50,13 +50,22 @@ class Logger {
 
     const logDir = path.dirname(this.config.logFile);
     if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
+      try {
+        fs.mkdirSync(logDir, { recursive: true });
+      } catch {
+        // Directory may have been created by another process
+      }
     }
 
-    this.logFileStream = fs.createWriteStream(this.config.logFile, {
-      flags: 'a',
-      encoding: 'utf-8',
-    });
+    try {
+      this.logFileStream = fs.createWriteStream(this.config.logFile, {
+        flags: 'a',
+        encoding: 'utf-8',
+      });
+    } catch {
+      // If we can't create the file stream, just disable file logging
+      this.logFileStream = null;
+    }
   }
 
   private formatMessage(level: string, message: string, data?: unknown): string {
