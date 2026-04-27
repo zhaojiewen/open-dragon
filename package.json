@@ -1,6 +1,6 @@
 {
   "name": "opendragon",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Multi-provider AI CLI tool",
   "main": "dist/index.js",
   "bin": {
