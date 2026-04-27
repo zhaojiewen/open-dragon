@@ -37,10 +37,18 @@ describe('ReadTool', () => {
   });
 
   it('should fail if file does not exist', async () => {
-    const result = await readTool.execute({ file_path: '/nonexistent/file.txt' });
+    const nonExistentFile = path.join(tempDir, 'does-not-exist.txt');
+    const result = await readTool.execute({ file_path: nonExistentFile });
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('File not found');
+  });
+
+  it('should block path traversal attempts', async () => {
+    const result = await readTool.execute({ file_path: '/etc/passwd' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('blocked');
   });
 
   it('should fail if path is a directory', async () => {

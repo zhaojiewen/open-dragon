@@ -1,10 +1,6 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import path from 'path';
+import { spawn } from 'child_process';
 import { BaseTool, ToolExecuteResult, ToolContext } from './base.js';
 import { z } from 'zod';
-
-const execAsync = promisify(exec);
 
 const GrepParamsSchema = z.object({
   pattern: z.string().describe('The pattern to search for'),
@@ -32,59 +28,75 @@ export class GrepTool extends BaseTool {
 
     const { pattern, path: searchPath, file_pattern, ignore_case = false } = params as z.infer<typeof GrepParamsSchema>;
 
-    try {
-      const cwd = searchPath || context?.workingDirectory || process.cwd();
+    const cwd = searchPath || context?.workingDirectory || process.cwd();
 
-      // Build grep command
-      let command = 'grep';
-      if (ignore_case) command += ' -i';
-      command += ' -rn'; // recursive, line numbers
+    // Build args array for safe execution (no shell interpolation)
+    const args: string[] = ['-rn']; // recursive, line numbers
+    if (ignore_case) args.push('-i');
+    if (file_pattern) {
+      args.push(`--include=${file_pattern}`);
+    }
+    args.push('--', pattern, cwd);
 
-      if (file_pattern) {
-        command += ` --include="${file_pattern}"`;
-      }
-
-      command += ` "${pattern.replace(/"/g, '\\"')}" "${cwd}"`;
-
-      const { stdout, stderr } = await execAsync(command, {
-        maxBuffer: 1024 * 1024 * 10,
+    return new Promise((resolve) => {
+      const child = spawn('grep', args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30000,
       });
 
-      if (!stdout.trim()) {
-        return {
-          success: true,
-          output: 'No matches found.',
-        };
-      }
+      let stdout = '';
+      let stderr = '';
+      let killed = false;
 
-      // Limit output
-      const lines = stdout.trim().split('\n');
-      const maxLines = 100;
-      const truncated = lines.length > maxLines;
+      child.stdout!.on('data', (data: Buffer) => {
+        stdout += data.toString();
+        if (stdout.length > 1024 * 1024 * 10) { // 10MB limit
+          child.kill();
+          killed = true;
+          resolve({
+            success: false,
+            output: 'Grep output exceeded 10MB limit. Try a more specific pattern.',
+            error: 'Output too large',
+          });
+        }
+      });
 
-      let output = lines.slice(0, maxLines).join('\n');
-      if (truncated) {
-        output += `\n... (${lines.length - maxLines} more results truncated)`;
-      }
+      child.stderr!.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
 
-      return {
-        success: true,
-        output,
-      };
-    } catch (error: any) {
-      // grep returns exit code 1 when no matches found
-      if (error.code === 1) {
-        return {
-          success: true,
-          output: 'No matches found.',
-        };
-      }
-      return {
-        success: false,
-        output: `Error searching: ${error.message}`,
-        error: error.message,
-      };
-    }
+      child.on('close', (code: number | null) => {
+        if (killed) return;
+
+        if (code === 0 && stdout.trim()) {
+          const lines = stdout.trim().split('\n');
+          const maxLines = 100;
+          const truncated = lines.length > maxLines;
+
+          let output = lines.slice(0, maxLines).join('\n');
+          if (truncated) {
+            output += `\n... (${lines.length - maxLines} more results truncated)`;
+          }
+
+          resolve({ success: true, output });
+        } else if (code === 1) {
+          resolve({ success: true, output: 'No matches found.' });
+        } else {
+          resolve({
+            success: false,
+            output: stderr || `grep exited with code ${code}`,
+            error: stderr || `Exit code: ${code}`,
+          });
+        }
+      });
+
+      child.on('error', (err: Error) => {
+        resolve({
+          success: false,
+          output: `Error executing grep: ${err.message}`,
+          error: err.message,
+        });
+      });
+    });
   }
 }

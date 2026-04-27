@@ -21,11 +21,13 @@ export interface LoggerConfig {
   enableConsole: boolean;
   timestamp: boolean;
   colors: boolean;
+  securityLogFile?: string;
 }
 
 class Logger {
   private config: LoggerConfig;
   private logFileStream: fs.WriteStream | null = null;
+  private securityLogStream: fs.WriteStream | null = null;
   private timers: Map<string, number> = new Map();
   public _level: LogLevel; // Public for testing/debugging
 
@@ -37,11 +39,16 @@ class Logger {
       enableConsole: config.enableConsole ?? true,
       timestamp: config.timestamp ?? true,
       colors: config.colors ?? true,
+      securityLogFile: config.securityLogFile,
     };
     this._level = this.config.level;
 
     if (this.config.enableFile && this.config.logFile) {
       this.initFileStream();
+    }
+
+    if (this.config.securityLogFile) {
+      this.initSecurityLogStream();
     }
   }
 
@@ -51,7 +58,7 @@ class Logger {
     const logDir = path.dirname(this.config.logFile);
     if (!fs.existsSync(logDir)) {
       try {
-        fs.mkdirSync(logDir, { recursive: true });
+        fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
       } catch {
         // Directory may have been created by another process
       }
@@ -63,8 +70,30 @@ class Logger {
         encoding: 'utf-8',
       });
     } catch {
-      // If we can't create the file stream, just disable file logging
       this.logFileStream = null;
+    }
+  }
+
+  private initSecurityLogStream(): void {
+    if (!this.config.securityLogFile) return;
+
+    const logDir = path.dirname(this.config.securityLogFile);
+    if (!fs.existsSync(logDir)) {
+      try {
+        fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+      } catch {
+        // Directory may have been created by another process
+      }
+    }
+
+    try {
+      this.securityLogStream = fs.createWriteStream(this.config.securityLogFile, {
+        flags: 'a',
+        encoding: 'utf-8',
+      });
+    } catch {
+      // If we can't create the file stream, just disable security logging
+      this.securityLogStream = null;
     }
   }
 
@@ -131,6 +160,23 @@ class Logger {
     this.log(LogLevel.ERROR, 'ERROR', message, data);
   }
 
+  security(event: string, details?: Record<string, any>): void {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      timestamp,
+      event,
+      details,
+    };
+
+    // Write to security log file
+    if (this.securityLogStream) {
+      this.securityLogStream.write(JSON.stringify(logEntry) + '\n');
+    }
+
+    // Also log to regular log
+    this.info(`SECURITY: ${event}`, details);
+  }
+
   setLevel(level: LogLevel): void {
     this.config.level = level;
     this._level = level;
@@ -138,6 +184,17 @@ class Logger {
 
   getLevel(): LogLevel {
     return this._level;
+  }
+
+  setLogFile(filePath: string): void {
+    this.config.logFile = filePath;
+    this.config.enableFile = true;
+    this.initFileStream();
+  }
+
+  setSecurityLogFile(filePath: string): void {
+    this.config.securityLogFile = filePath;
+    this.initSecurityLogStream();
   }
 
   enableDebug(): void {
@@ -172,6 +229,10 @@ class Logger {
     if (this.logFileStream) {
       this.logFileStream.end();
       this.logFileStream = null;
+    }
+    if (this.securityLogStream) {
+      this.securityLogStream.end();
+      this.securityLogStream = null;
     }
   }
 }

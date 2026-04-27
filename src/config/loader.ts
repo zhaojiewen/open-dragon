@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { DragonConfig, DragonConfigSchema, DEFAULT_CONFIG } from './schema.js';
+import { DragonConfigSchema, DEFAULT_CONFIG } from './schema.js';
+import type { DragonConfig } from './schema.js';
 import { ConfigNotFoundError, ConfigInvalidError } from '../utils/errors.js';
 import { secureConfigManager, encryptionService } from '../encryption/index.js';
 import { getLogger } from '../utils/logger.js';
@@ -41,6 +42,15 @@ export async function loadConfig(useEncryption: boolean = false): Promise<Dragon
     });
 
     logger.info('Configuration loaded successfully');
+
+    // Initialize security logging if configured
+    if (config.logging?.logFile) {
+      const securityLogFile = path.join(path.dirname(config.logging.logFile), 'security.log');
+      logger.setLogFile(config.logging.logFile);
+      logger.setSecurityLogFile(securityLogFile);
+      logger.security('config_loaded', { providers: Object.keys(config.providers) });
+    }
+
     return config;
   } catch (error) {
     if (error instanceof SyntaxError) {
@@ -54,9 +64,11 @@ export async function loadConfig(useEncryption: boolean = false): Promise<Dragon
       throw error;
     }
 
+    // Include the original validation error message for debugging
+    const originalMsg = error instanceof Error ? error.message : String(error);
     throw new ConfigInvalidError(
-      `Failed to load config file: ${CONFIG_FILE}`,
-      { error: error instanceof Error ? error.message : String(error) }
+      `Failed to load config file: ${CONFIG_FILE} - ${originalMsg}`,
+      { error: originalMsg }
     );
   }
 }
@@ -68,7 +80,7 @@ export async function initConfig(
   logger.debug(`Initializing config at ${CONFIG_FILE}`);
 
   if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
     logger.debug(`Created config directory: ${CONFIG_DIR}`);
   }
 
@@ -97,8 +109,45 @@ export async function initConfig(
   }
 
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(configToSave, null, 2));
+  fs.chmodSync(CONFIG_FILE, 0o600);
   logger.info(`Configuration file created at ${CONFIG_FILE}`);
   console.log(`Configuration file created at ${CONFIG_FILE}`);
+}
+
+function ensureConfigDirectory(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
+}
+
+export function validateConfig(config: DragonConfig): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  // Check if default provider exists
+  if (!config.providers[config.defaultProvider]) {
+    errors.push(`Default provider '${config.defaultProvider}' is not configured in providers`);
+  }
+
+  // Check each provider has valid API key
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (!provider.apiKey) {
+      errors.push(`Provider '${name}' is missing API key`);
+    } else if (provider.apiKey.startsWith('YOUR_')) {
+      errors.push(`Provider '${name}' has placeholder API key that needs to be replaced`);
+    }
+  }
+
+  // Check tool configurations
+  if (config.tools?.enabled) {
+    const availableTools = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'webfetch', 'websearch', 'agent'];
+    for (const tool of config.tools.enabled) {
+      if (!availableTools.includes(tool)) {
+        errors.push(`Unknown tool '${tool}' in enabled tools list`);
+      }
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 export function getConfigPath(): string {
@@ -113,8 +162,11 @@ export function saveConfig(config: DragonConfig, useEncryption: boolean = false)
     configToSave = secureConfigManager.encryptConfig(config);
   }
 
+  ensureConfigDirectory();
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(configToSave, null, 2));
+  fs.chmodSync(CONFIG_FILE, 0o600);
   logger.debug('Configuration saved successfully');
 }
 
-export { DragonConfig, DEFAULT_CONFIG };
+export type { DragonConfig };
+export { DEFAULT_CONFIG };

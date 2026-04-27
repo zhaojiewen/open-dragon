@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import {
-  BaseProvider,
+import { BaseProvider } from './base.js';
+import type {
   Message,
   ToolDefinition,
   ChatOptions,

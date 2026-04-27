@@ -31,12 +31,10 @@ export class EncryptionService {
       if (password) {
         this.masterKey = await this.decryptKey(encryptedKey, password);
       } else {
-        // Try to read plain key (development mode)
-        try {
-          this.masterKey = encryptedKey;
-        } catch {
-          throw new ConfigError('Master key file exists but cannot be read. Please provide password.', ErrorCode.CONFIG_INVALID);
+        if (encryptedKey.length > KEY_LENGTH) {
+          throw new ConfigError('Master key file appears encrypted. Please provide --password.', ErrorCode.CONFIG_INVALID);
         }
+        this.masterKey = encryptedKey;
       }
     } else {
       // Generate new master key

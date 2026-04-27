@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import {
-  BaseProvider,
+import { BaseProvider } from './base.js';
+import type {
   Message,
   ToolDefinition,
   ChatOptions,

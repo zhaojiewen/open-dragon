@@ -1,5 +1,4 @@
 import fs from 'fs';
-import path from 'path';
 import { BaseTool, ToolExecuteResult, ToolContext } from './base.js';
 import { z } from 'zod';
 
@@ -30,11 +29,15 @@ export class EditTool extends BaseTool {
     const { file_path, old_string, new_string, replace_all = false } = params as z.infer<typeof EditParamsSchema>;
 
     try {
-      let targetPath = file_path;
-
-      // Handle relative paths
-      if (!path.isAbsolute(file_path) && context?.workingDirectory) {
-        targetPath = path.join(context.workingDirectory, file_path);
+      let targetPath: string;
+      try {
+        targetPath = this.resolvePath(file_path, context);
+      } catch (pathError: any) {
+        return {
+          success: false,
+          output: pathError.message,
+          error: 'Path traversal blocked',
+        };
       }
 
       // Check if file exists

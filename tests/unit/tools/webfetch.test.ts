@@ -180,7 +180,10 @@ describe('WebFetchTool Integration', () => {
 
   it('should fetch content from HTTP URL', async () => {
     const tool = new WebFetchTool();
-    const result = await tool.execute({ url: `http://localhost:${port}/` });
+    const result = await tool.execute(
+      { url: `http://localhost:${port}/` },
+      { workingDirectory: process.cwd(), permissions: ['webfetch:allow-localhost'] }
+    );
 
     expect(result.success).toBe(true);
     expect(result.output).toContain('Hello from test server');
@@ -188,7 +191,10 @@ describe('WebFetchTool Integration', () => {
 
   it('should handle 301 redirects', async () => {
     const tool = new WebFetchTool();
-    const result = await tool.execute({ url: `http://localhost:${port}/redirect301` });
+    const result = await tool.execute(
+      { url: `http://localhost:${port}/redirect301` },
+      { workingDirectory: process.cwd(), permissions: ['webfetch:allow-localhost'] }
+    );
 
     expect(result.success).toBe(true);
     expect(result.output).toContain('Final destination content');
@@ -196,7 +202,10 @@ describe('WebFetchTool Integration', () => {
 
   it('should handle 302 redirects', async () => {
     const tool = new WebFetchTool();
-    const result = await tool.execute({ url: `http://localhost:${port}/redirect` });
+    const result = await tool.execute(
+      { url: `http://localhost:${port}/redirect` },
+      { workingDirectory: process.cwd(), permissions: ['webfetch:allow-localhost'] }
+    );
 
     expect(result.success).toBe(true);
     expect(result.output).toContain('Final destination content');
@@ -204,8 +213,10 @@ describe('WebFetchTool Integration', () => {
 
   it('should handle connection errors', async () => {
     const tool = new WebFetchTool();
-    // Try to connect to a port that's not listening
-    const result = await tool.execute({ url: 'http://localhost:59999/' });
+    const result = await tool.execute(
+      { url: 'http://localhost:59999/' },
+      { workingDirectory: process.cwd(), permissions: ['webfetch:allow-localhost'] }
+    );
 
     expect(result.success).toBe(false);
     expect(result.error).toBeDefined();
@@ -213,10 +224,20 @@ describe('WebFetchTool Integration', () => {
 
   it('should handle server errors gracefully', async () => {
     const tool = new WebFetchTool();
-    const result = await tool.execute({ url: `http://localhost:${port}/error` });
+    const result = await tool.execute(
+      { url: `http://localhost:${port}/error` },
+      { workingDirectory: process.cwd(), permissions: ['webfetch:allow-localhost'] }
+    );
 
-    // Server returns 500 but connection succeeds, so we get the response
     expect(result.success).toBe(true);
     expect(result.output).toContain('Server error');
+  });
+
+  it('should block localhost by default', async () => {
+    const tool = new WebFetchTool();
+    const result = await tool.execute({ url: `http://localhost:${port}/` });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('URL blocked');
   });
 });

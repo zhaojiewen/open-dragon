@@ -11,9 +11,16 @@ export const BashToolConfigSchema = z.object({
   dangerouslyDisableSandbox: z.boolean().default(false),
 });
 
+export const ExecutionLimitsSchema = z.object({
+  maxToolCallsPerTurn: z.number().default(25),
+  maxTotalToolCalls: z.number().default(200),
+  maxOutputSize: z.number().default(100000), // 100KB
+});
+
 export const ToolsConfigSchema = z.object({
   enabled: z.array(z.string()).default(['bash', 'read', 'write', 'edit']),
   bash: BashToolConfigSchema.optional(),
+  executionLimits: ExecutionLimitsSchema.optional(),
 });
 
 export const LogConfigSchema = z.object({
@@ -29,6 +36,25 @@ export const DragonConfigSchema = z.object({
   providers: z.record(z.string(), ProviderConfigSchema).default({}),
   tools: ToolsConfigSchema.optional(),
   logging: LogConfigSchema.optional(),
+}).refine((config) => {
+  // Validate that defaultProvider exists in providers
+  if (Object.keys(config.providers).length > 0 && !config.providers[config.defaultProvider]) {
+    return false;
+  }
+  return true;
+}, {
+  message: "defaultProvider must be defined in providers",
+  path: ["defaultProvider"],
+}).refine((config) => {
+  // Validate that the default provider doesn't use a placeholder API key
+  const defaultProvider = config.providers[config.defaultProvider];
+  if (defaultProvider?.apiKey && defaultProvider.apiKey.startsWith('YOUR_')) {
+    return false;
+  }
+  return true;
+}, {
+  message: 'API key for default provider must not be a placeholder value (YOUR_...)',
+  path: ['providers'],
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;
@@ -64,6 +90,11 @@ export const DEFAULT_CONFIG: DragonConfig = {
     enabled: ['bash', 'read', 'write', 'edit', 'agent', 'websearch', 'webfetch', 'glob', 'grep'],
     bash: {
       dangerouslyDisableSandbox: false,
+    },
+    executionLimits: {
+      maxToolCallsPerTurn: 25,
+      maxTotalToolCalls: 200,
+      maxOutputSize: 100000,
     },
   },
   logging: {

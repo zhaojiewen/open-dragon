@@ -21,12 +21,14 @@ describe('Logger', () => {
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
     consoleWarnSpy.mockRestore();
     try {
       logger?.close();
+      // Let file stream finish closing
+      await new Promise(resolve => setTimeout(resolve, 20));
     } catch {}
     try {
       fs.rmSync(tempDir, { recursive: true, force: true });

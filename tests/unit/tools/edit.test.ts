@@ -68,14 +68,26 @@ describe('EditTool', () => {
   });
 
   it('should fail if file does not exist', async () => {
+    const nonExistentFile = path.join(tempDir, 'does-not-exist.txt');
     const result = await editTool.execute({
-      file_path: '/nonexistent/file.txt',
+      file_path: nonExistentFile,
       old_string: 'old',
       new_string: 'new',
     });
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('File not found');
+  });
+
+  it('should block path traversal attempts', async () => {
+    const result = await editTool.execute({
+      file_path: '/etc/passwd',
+      old_string: 'old',
+      new_string: 'new',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('blocked');
   });
 
   it('should fail on multiple occurrences without replace_all', async () => {

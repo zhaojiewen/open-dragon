@@ -1,5 +1,6 @@
-import { BaseTool, ToolExecuteResult, ToolContext } from './base.js';
-import { AIProvider, Message, ToolCall } from '../providers/base.js';
+import { BaseTool } from './base.js';
+import type { ToolExecuteResult, ToolContext } from './base.js';
+import type { AIProvider, Message, ToolCall } from '../providers/base.js';
 import { z } from 'zod';
 
 const AgentParamsSchema = z.object({

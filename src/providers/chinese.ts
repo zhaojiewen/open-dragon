@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import {
-  BaseProvider,
+import { BaseProvider } from './base.js';
+import type {
   Message,
   ToolDefinition,
   ChatOptions,

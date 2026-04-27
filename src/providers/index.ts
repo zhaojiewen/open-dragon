@@ -1,10 +1,10 @@
-import { AIProvider } from './base.js';
+import type { AIProvider } from './base.js';
 import { OpenAIProvider } from './openai.js';
 import { AnthropicProvider } from './anthropic.js';
 import { GeminiProvider } from './gemini.js';
 import { DeepSeekProvider } from './deepseek.js';
 import { ChineseProvider, CHINESE_PROVIDERS } from './chinese.js';
-import { DragonConfig } from '../config/index.js';
+import type { DragonConfig } from '../config/index.js';
 
 export function createProvider(providerName: string, config: DragonConfig): AIProvider {
   const providerConfig = config.providers[providerName];
@@ -76,4 +76,4 @@ export function listSupportedProviders(): string[] {
   ];
 }
 
-export { AIProvider };
+export type { AIProvider };

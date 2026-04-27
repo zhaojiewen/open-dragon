@@ -26,11 +26,15 @@ export class WriteTool extends BaseTool {
     const { file_path, content } = params as z.infer<typeof WriteParamsSchema>;
 
     try {
-      let targetPath = file_path;
-
-      // Handle relative paths
-      if (!path.isAbsolute(file_path) && context?.workingDirectory) {
-        targetPath = path.join(context.workingDirectory, file_path);
+      let targetPath: string;
+      try {
+        targetPath = this.resolvePath(file_path, context);
+      } catch (pathError: any) {
+        return {
+          success: false,
+          output: pathError.message,
+          error: 'Path traversal blocked',
+        };
       }
 
       // Ensure directory exists
