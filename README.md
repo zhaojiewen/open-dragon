@@ -4,30 +4,30 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/node/v/opendragon.svg)](https://nodejs.org/)
 
-A powerful command-line tool that supports multiple AI providers, inspired by Claude Code.
+A powerful command-line AI tool supporting multiple providers, inspired by Claude Code.
 
 ## ✨ Features
 
-- 🔄 **Multi-Provider Support**: OpenAI, Anthropic Claude, Google Gemini, DeepSeek, and Chinese LLMs
+- 🔄 **Multi-Provider Support**: Anthropic Claude, OpenAI, Google Gemini, DeepSeek, and Chinese LLMs (Qwen, Moonshot, Yi, Doubao)
 - 💬 **REPL Interface**: Interactive chat with streaming responses
-- 🛠️ **Tool System**: Execute commands, read/write files, search code, and more
+- 🛠️ **Tool System**: Execute commands, read/write files, search code, web fetch, and more
 - 🤖 **Agent Support**: Spawn sub-agents for complex tasks
+- 🔐 **Encryption**: AES-256-GCM encryption for API keys and sensitive fields
+- ⚡ **Performance Monitoring**: Built-in timing and cost tracking
 - ⚙️ **Configurable**: Easy configuration for multiple API keys
-- 📦 **Zero Dependencies**: Single file distribution available
 
 ## 📦 Installation
 
-### npm（推荐）
+### npm
 
 ```bash
 npm install -g opendragon
 
-# 运行
+# Run
 dragon
 ```
 
-
-### 从源码构建
+### Build from source
 
 ```bash
 git clone https://github.com/zhaojiewen/open-dragon.git
@@ -40,23 +40,24 @@ npm link
 ## 🚀 Quick Start
 
 ```bash
-# 1. 初始化配置
+# 1. Initialize config (with optional encryption)
 dragon init
+dragon init --encrypt          # Encrypt API keys with a password
 
-# 2. 编辑配置文件添加API密钥
-# 配置文件位置: ~/.dragon/config.json
-vim ~/.dragon/config.json
+# 2. Edit config to add your API keys
+dragon config edit
+# Or manually: vim ~/.dragon/config.json
 
-# 3. 启动交互式聊天
+# 3. Start interactive chat
 dragon
 
-# 或指定提供商
+# Or specify a provider and model
 dragon chat --provider openai --model gpt-4o
 ```
 
 ## ⚙️ Configuration
 
-配置文件位于 `~/.dragon/config.json`：
+Config file: `~/.dragon/config.json`
 
 ```json
 {
@@ -69,8 +70,8 @@ dragon chat --provider openai --model gpt-4o
     },
     "anthropic": {
       "apiKey": "YOUR_ANTHROPIC_API_KEY",
-      "models": ["claude-sonnet-4-6", "claude-opus-4-7"],
-      "defaultModel": "claude-sonnet-4-6"
+      "models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+      "defaultModel": "claude-opus-4-7"
     },
     "gemini": {
       "apiKey": "YOUR_GEMINI_API_KEY",
@@ -85,12 +86,43 @@ dragon chat --provider openai --model gpt-4o
     "qwen": {
       "apiKey": "YOUR_QWEN_API_KEY",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "models": ["qwen-max", "qwen-plus"],
+      "models": ["qwen-max", "qwen-plus", "qwen-turbo"],
       "defaultModel": "qwen-max"
     }
   },
   "tools": {
-    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "agent"]
+    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "agent"],
+    "executionLimits": {
+      "maxToolCallsPerTurn": 25,
+      "maxTotalToolCalls": 200,
+      "maxOutputSize": 100000
+    }
+  },
+  "workspace": {
+    "paths": [],
+    "writeEnabled": true,
+    "enforceBounds": false,
+    "allowHomeDir": true
+  },
+  "logging": {
+    "level": "info",
+    "logFile": "/path/to/dragon.log",
+    "enableConsole": true
+  }
+}
+```
+
+### Workspace Configuration
+
+Restrict file operations to specific directories:
+
+```json
+{
+  "workspace": {
+    "paths": ["/home/user/projects"],
+    "writeEnabled": true,
+    "enforceBounds": true,
+    "allowHomeDir": true
   }
 }
 ```
@@ -99,57 +131,70 @@ dragon chat --provider openai --model gpt-4o
 
 | Command | Description |
 |---------|-------------|
-| `dragon` | 启动REPL（默认） |
-| `dragon init` | 初始化配置文件 |
-| `dragon config` | 显示配置文件位置 |
-| `dragon chat` | 启动交互式聊天 |
-| `dragon --help` | 显示帮助 |
-| `dragon --version` | 显示版本 |
+| `dragon` | Start REPL (default) |
+| `dragon init` | Initialize config file |
+| `dragon init --encrypt` | Initialize with encrypted API keys |
+| `dragon config` | Show config file location |
+| `dragon config edit` | Open config in editor |
+| `dragon config show` | Print config contents |
+| `dragon config validate` | Validate configuration |
+| `dragon chat` | Start interactive chat |
+| `dragon chat -p <provider> -m <model>` | Chat with specific provider/model |
+| `dragon --monitor` | Start with performance monitoring |
+| `dragon --help` | Show help |
+| `dragon --version` | Show version |
 
 ## 💻 REPL Commands
 
-进入REPL后可用的命令：
-
 | Command | Description |
 |---------|-------------|
-| `/help` | 显示可用命令 |
-| `/clear` | 清空对话历史 |
-| `/history` | 显示对话历史 |
-| `/provider` | 显示当前提供商 |
-| `/model` | 显示或切换模型 |
-| `/tools` | 列出可用工具 |
-| `/exit` | 退出REPL |
+| `/help` | Show available commands |
+| `/clear` | Clear conversation history |
+| `/history` | Show conversation history |
+| `/history save <name>` | Save history to file |
+| `/history load <name>` | Load history from file |
+| `/provider [name]` | Show or switch provider |
+| `/model [name]` | Show or switch model |
+| `/tools` | List available tools |
+| `/auto [out]` | Toggle auto-approve dangerous tools |
+| `/ask` | Require confirmation for all tools |
+| `/workspace <path>` | Set workspace directory |
+| `/save-tokens` | Save token usage data |
+| `/cost` | Show token usage & cost estimate |
+| `/perf` | Show performance report (needs `--monitor`) |
+| `/debug [on|off]` | Toggle debug mode |
+| `/exit`, `/quit` | Exit REPL |
 
 ## 🔧 Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `bash` | 执行Shell命令 |
-| `read` | 读取文件内容 |
-| `write` | 写入文件 |
-| `edit` | 编辑文件（字符串替换） |
-| `glob` | 按模式查找文件 |
-| `grep` | 搜索文件内容 |
-| `webfetch` | 抓取网页内容 |
-| `websearch` | 网络搜索（需配置API） |
-| `agent` | 启动子代理执行任务 |
+| `bash` | Execute shell commands |
+| `read` | Read file contents |
+| `write` | Write to files |
+| `edit` | Edit files with string replacement |
+| `glob` | Find files by pattern |
+| `grep` | Search file contents |
+| `webfetch` | Fetch web page content |
+| `websearch` | Web search (requires API config) |
+| `agent` | Spawn sub-agent for complex tasks |
 
 ## 🌐 Supported Providers
 
 | Provider | Models |
 |----------|--------|
+| Anthropic | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5 |
 | OpenAI | gpt-4o, gpt-4-turbo, gpt-3.5-turbo |
-| Anthropic | claude-sonnet-4-6, claude-opus-4-7, claude-haiku-4-5 |
 | Google Gemini | gemini-1.5-pro, gemini-1.5-flash |
 | DeepSeek | deepseek-chat, deepseek-reasoner |
-| 通义千问 (Qwen) | qwen-max, qwen-plus, qwen-turbo |
-| 月之暗面 (Moonshot) | moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k |
-| 零一万物 (Yi) | yi-lightning, yi-large, yi-medium |
-| 豆包 (Doubao) | doubao-pro-4k, doubao-pro-32k, doubao-pro-128k |
+| Qwen (通义千问) | qwen-max, qwen-plus, qwen-turbo, qwen-long |
+| Moonshot (月之暗面) | moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k |
+| Yi (零一万物) | yi-lightning, yi-large, yi-medium |
+| Doubao (豆包) | doubao-pro-4k, doubao-pro-32k, doubao-pro-128k |
 
-## ➕ Adding Custom Providers
+## ➕ Custom Providers
 
-支持任何OpenAI兼容的API：
+Any OpenAI-compatible API can be added:
 
 ```json
 {
@@ -164,213 +209,102 @@ dragon chat --provider openai --model gpt-4o
 }
 ```
 
-## 📋 Development
+## 🔐 Security
+
+### API Key Encryption
+
+AES-256-GCM encryption for sensitive config fields (`apiKey`, `token`, `secret`, `password`):
 
 ```bash
-# 安装依赖
-npm install
-
-# 构建
-npm run build
-
-# 开发模式
-npm run dev
-
-# 打包成单文件
-npm run bundle
-
-# 运行测试
-npm test
-
-# 测试覆盖率
-npm run test:coverage
-
-# 监听模式测试
-npm run test:watch
-```
-
-## 🧪 测试
-
-项目包含完整的单元测试套件，使用 Vitest 框架：
-
-```bash
-# 运行所有测试
-npm test
-
-# 生成覆盖率报告
-npm run test:coverage
-
-# 监听模式（开发时推荐）
-npm run test:watch
-
-# 可视化测试界面
-npm run test:ui
-```
-
-测试覆盖详情请参阅 `test/` 目录。
-
-## 🔐 安全特性
-
-### API 密钥加密
-
-支持对配置文件中的敏感字段进行加密存储：
-
-```bash
-# 初始化配置并启用加密（交互式输入密码）
+# Initialize with encryption
 dragon init --encrypt
 
-# 使用命令行密码
-dragon init --encrypt --password your-secure-password
+# Run with encrypted config
+DRAGON_PASSWORD=yourpassword dragon
+
+# Or use the --password flag (visible in shell history - less secure)
+dragon init --encrypt --password yourpassword
 ```
 
-安全特性：
-- ✅ **AES-256-GCM** 加密算法
-- ✅ 自动识别敏感字段（`apiKey`, `token`, `password`, `secret`等）
-- ✅ **PBKDF2** 密钥派生（100,000 次迭代）
-- ✅ 安全的文件权限（`0o600`）
-- ✅ 随机盐值和 IV
+Security features:
+- **AES-256-GCM** with random IV per encryption
+- **PBKDF2** key derivation (100,000 iterations, SHA-512)
+- Automatic detection of sensitive fields
+- Secure file permissions (`0o600`)
+- Timing-safe comparison for key verification
 
-使用示例：
-```bash
-# 加密配置
-dragon init --encrypt --password mypassword
-
-# 运行时自动解密（会提示输入密码）
-dragon
-
-# 或设置环境变量（不推荐在生产环境使用）
-DRAGON_ENCRYPTION_PASSWORD=mypassword dragon
-```
-
-## 📊 性能监控
-
-启用性能监控以分析操作执行时间：
+## 📊 Performance Monitoring
 
 ```bash
-# 环境变量启用
+# Enable via flag
+dragon --monitor
+
+# Or via environment variable
 DRAGON_PERF_MONITOR=true dragon
 
-# 或在 REPL 中查看报告
+# View report in REPL
 > /perf
 ```
 
-监控指标：
-- ⏱️ API 调用时间
-- 🔧 工具执行统计
-- 📄 配置加载时间
-- 📡 流式响应性能
+Tracked metrics: API call times, tool execution stats, config load time, streaming performance.
 
-性能报告示例：
-```
-📊 Performance Report:
-================================================================================
-┌─────────┬───────────┬────────────┬─────────┬─────────┬─────────┐
-│ (index) │ Operation │ Total Calls│ Total   │ Avg     │ Max     │
-├─────────┼───────────┼────────────┼─────────┼─────────┼─────────┤
-│    0    │ 'anthropic:chat' │  5  │ '152.34'│ '30.47' │ '45.23' │
-│    1    │ 'tool:bash'      │ 10  │ '85.12' │ '8.51'  │ '12.34' │
-└─────────┴───────────┴────────────┴─────────┴─────────┴─────────┘
-```
-
-## 🐛 调试模式
-
-启用详细日志输出以便调试：
+## 🐛 Debug Mode
 
 ```bash
-# 方式 1: 环境变量
+# Environment variable
 DRAGON_DEBUG=true dragon
 
-# 方式 2: REPL 命令
+# REPL command
 > /debug on
-
-# 关闭调试
 > /debug off
 
-# 查看当前状态
-> /debug
-```
-
-日志级别说明：
-- **DEBUG**: 详细的调试信息（API 请求、内部状态）
-- **INFO**: 常规信息（操作成功消息）
-- **WARN**: 警告信息（非关键错误）
-- **ERROR**: 错误信息（操作失败）
-- **SILENT**: 不输出任何日志
-
-环境变量控制：
-```bash
+# Log levels via env
 DRAGON_LOG_LEVEL=0  # DEBUG
-DRAGON_LOG_LEVEL=1  # INFO（默认）
+DRAGON_LOG_LEVEL=1  # INFO (default)
 DRAGON_LOG_LEVEL=2  # WARN
 DRAGON_LOG_LEVEL=3  # ERROR
 DRAGON_LOG_LEVEL=4  # SILENT
 ```
 
-```typescript
-import { DragonError, ErrorCode, wrapError } from './utils/errors';
-
-// 使用自定义错误
-throw new ConfigNotFoundError('/path/to/config');
-throw new ApiKeyMissingError('openai');
-
-// 错误包装
-const wrapped = wrapError(error, 'Operation failed');
-console.log(wrapped.code, wrapped.details);
-```
-
-#### 📊 日志系统
-多级别日志，支持文件输出和彩色格式：
+## 📋 Development
 
 ```bash
-# 启用调试模式
-DEBUG=true dragon
+npm install          # Install dependencies
+npm run build        # Compile TypeScript
+npm run dev          # Run directly with tsx
+npm run bundle       # Create single-file dist
+npm run lint         # Run ESLint
 ```
 
-```typescript
-import { getLogger } from './utils/logger';
-
-const logger = getLogger();
-logger.debug('Debug info', { data: 'value' });
-logger.info('Info message');
-logger.warn('Warning');
-logger.error('Error details');
-```
-
-#### ⚡ 性能监控
-内置性能指标收集和分析：
-
-```typescript
-import { getPerformanceMonitor } from './utils/performance';
-
-const monitor = getPerformanceMonitor();
-await monitor.timeAsync('operation', async () => { /* ... */ });
-monitor.logSummary(); // 打印性能统计
-```
-
-#### 🚀 CI/CD 集成
-- **GitHub Actions** 自动化测试和发布
-- 多 Node.js 版本测试 (18, 20, 22)
-- 自动 npm 发布
-- 代码覆盖率报告
-- 安全审计
-
-详细文档请查看 [DEVELOPMENT.md](./DEVELOPMENT.md)
-
-## 🔄 Release Process
+## 🧪 Testing
 
 ```bash
-# 更新版本
-npm version patch  # 或 minor / major
-
-# 发布到npm
-npm publish
-
-# 创建Git标签并推送
-git tag v1.0.0
-git push origin --tags
+npm test              # Run all tests
+npm run test:watch    # Watch mode
+npm run test:coverage # With coverage report (text + coverage/index.html)
+npx vitest tests/unit/path/to/test.test.ts  # Run single test file
 ```
 
-然后在GitHub上创建Release，上传打包后的文件。
+Test structure:
+
+```
+tests/
+├── unit/
+│   ├── tools/        # Tool tests (bash, read, write, edit, glob, grep, registry)
+│   ├── config/       # Config tests
+│   ├── encryption/   # Encryption tests
+│   ├── providers/    # Provider tests
+│   └── utils/        # Error, logger, performance tests
+```
+
+## 🔄 CI/CD
+
+GitHub Actions workflows (`.github/workflows/`):
+
+- **CI**: Runs on push to main, tests on Node.js 18.x/20.x/22.x, generates coverage reports
+- **Release**: Triggers on GitHub release, publishes to npm, uploads bundle
+
+Required secrets: `NPM_TOKEN`, `CODECOV_TOKEN` (optional)
 
 ## 📄 License
 
@@ -378,79 +312,10 @@ git push origin --tags
 
 ## 🤝 Contributing
 
-欢迎提交Issue和Pull Request！
+Issues and pull requests welcome!
 
 ## 📮 Links
 
 - [GitHub Repository](https://github.com/zhaojiewen/open-dragon)
 - [npm Package](https://www.npmjs.com/package/opendragon)
 - [Report Bug](https://github.com/zhaojiewen/open-dragon/issues)
-
-## 🧪 Testing
-
-This project uses [Vitest](https://vitest.dev/) for testing.
-
-### Running Tests
-
-```bash
-# Run all tests
-npm test
-
-# Run tests with coverage report
-npm run test:coverage
-
-# Run tests with UI
-npm run test:ui
-
-# Run tests in watch mode
-npm test -- --watch
-```
-
-### Test Structure
-
-```
-tests/
-├── unit/tools/          # Tool tests
-│   ├── bash.test.ts
-│   ├── read.test.ts
-│   ├── write.test.ts
-│   ├── edit.test.ts
-│   ├── glob.test.ts
-│   └── registry.test.ts
-├── encryption.test.ts   # Encryption service tests
-├── errors.test.ts       # Error handling tests
-├── logger.test.ts       # Logging system tests
-├── performance.test.ts  # Performance monitoring tests
-└── tools.test.ts        # Integration tests
-```
-
-### Coverage Reports
-
-After running `npm run test:coverage`, view the HTML report:
-```bash
-open coverage/index.html
-```
-
-## 🔄 CI/CD
-
-This project uses GitHub Actions for continuous integration and deployment.
-
-### Workflows
-
-- **CI Workflow** (`.github/workflows/ci.yml`):
-  - Runs on push to main/master branches
-  - Tests on Node.js 18.x, 20.x, 22.x
-  - Generates coverage reports
-  - Uploads to Codecov
-
-- **Release Workflow** (`.github/workflows/release.yml`):
-  - Triggers on GitHub release creation
-  - Publishes to npm automatically
-  - Uploads bundle to release
-
-### Required Secrets
-
-Configure these in your GitHub repository settings:
-
-- `NPM_TOKEN`: npm registry access token for publishing
-- `CODECOV_TOKEN`: Codecov upload token (optional)
