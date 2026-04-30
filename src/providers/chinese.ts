@@ -78,7 +78,7 @@ export class ChineseProvider extends BaseProvider {
       model: options?.model || this.defaultModel,
       messages: formattedMessages,
       max_tokens: options?.maxTokens || 4096,
-      temperature: options?.temperature ?? 0.7,
+      temperature: 0.7,
     };
 
     if (tools && tools.length > 0) {
@@ -129,7 +129,7 @@ export class ChineseProvider extends BaseProvider {
       model: options?.model || this.defaultModel,
       messages: formattedMessages,
       max_tokens: options?.maxTokens || 4096,
-      temperature: options?.temperature ?? 0.7,
+      temperature: 0.7,
       stream: true,
     };
 

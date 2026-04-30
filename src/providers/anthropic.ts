@@ -8,7 +8,7 @@ import type {
   StreamChunk,
   ToolCall,
 } from './base.js';
-import { ProviderError, ApiKeyMissingError, ApiRequestError, ApiRateLimitError, ErrorCode } from '../utils/errors.js';
+import { ApiKeyMissingError, ApiRequestError, ApiRateLimitError } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
 import { perfMonitor } from '../performance/index.js';
 
@@ -36,8 +36,8 @@ export class AnthropicProvider extends BaseProvider {
 
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl;
-    this.models = config.models || ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'];
-    this.defaultModel = config.defaultModel || 'claude-sonnet-4-6';
+    this.models = config.models || ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'];
+    this.defaultModel = config.defaultModel || 'claude-opus-4-7';
     this.client = new Anthropic({
       apiKey: this.apiKey,
       baseURL: this.baseUrl,
@@ -49,29 +49,32 @@ export class AnthropicProvider extends BaseProvider {
     tools?: ToolDefinition[],
     options?: ChatOptions
   ): Promise<AIResponse> {
-    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt);
+    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt, options?.cacheControl);
 
-    const requestParams: Anthropic.Messages.MessageCreateParams = {
+    const requestParams: Record<string, any> = {
       model: options?.model || this.defaultModel,
       messages: formattedMessages,
-      max_tokens: options?.maxTokens || 4096,
-      system: systemPrompt,
+      max_tokens: options?.maxTokens || 16000,
     };
+
+    this.applySystemPrompt(requestParams, systemPrompt, options?.cacheControl);
+    this.applyThinking(requestParams, options?.thinking);
+    this.applyEffort(requestParams, options?.effort);
 
     if (tools && tools.length > 0) {
       requestParams.tools = tools.map(tool => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.parameters as Anthropic.Tool['input_schema'],
+        input_schema: tool.parameters,
       }));
     }
 
     try {
       logger.debug(`Sending chat request to Anthropic API (model: ${requestParams.model})`);
-      
+
       const response = await perfMonitor.measure('anthropic:chat', () =>
-        this.client.messages.create(requestParams)
-      );
+        this.client.messages.create(requestParams as Anthropic.Messages.MessageCreateParams)
+      ) as Anthropic.Messages.Message;
 
       const toolCalls: ToolCall[] = [];
       let textContent = '';
@@ -93,13 +96,15 @@ export class AnthropicProvider extends BaseProvider {
       return {
         content: textContent,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        stopReason: response.stop_reason as 'end_turn' | 'tool_use' | 'max_tokens',
+        stopReason: this.mapStopReason(response.stop_reason),
         usage: {
           inputTokens: response.usage.input_tokens,
           outputTokens: response.usage.output_tokens,
+          cacheCreationTokens: response.usage.cache_creation_input_tokens ?? undefined,
+          cacheReadTokens: response.usage.cache_read_input_tokens ?? undefined,
         },
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
@@ -109,31 +114,32 @@ export class AnthropicProvider extends BaseProvider {
     tools?: ToolDefinition[],
     options?: ChatOptions
   ): AsyncGenerator<StreamChunk> {
-    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt);
+    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt, options?.cacheControl);
 
-    const requestParams: Anthropic.Messages.MessageCreateParams = {
+    const requestParams: Record<string, any> = {
       model: options?.model || this.defaultModel,
       messages: formattedMessages,
-      max_tokens: options?.maxTokens || 4096,
-      system: systemPrompt,
+      max_tokens: options?.maxTokens || 64000,
       stream: true,
     };
+
+    this.applySystemPrompt(requestParams, systemPrompt, options?.cacheControl);
+    this.applyThinking(requestParams, options?.thinking);
+    this.applyEffort(requestParams, options?.effort);
 
     if (tools && tools.length > 0) {
       requestParams.tools = tools.map(tool => ({
         name: tool.name,
         description: tool.description,
-        input_schema: tool.parameters as Anthropic.Tool['input_schema'],
+        input_schema: tool.parameters,
       }));
     }
 
     try {
       logger.debug(`Starting stream to Anthropic API (model: ${requestParams.model})`);
-      
-      // Use the messages API correctly with streaming
-      const stream = this.client.messages.stream(requestParams);
 
-      // Track tool calls during streaming
+      const stream = this.client.messages.stream(requestParams as Anthropic.Messages.MessageCreateParams);
+
       const pendingToolCalls: Map<number, { id: string; name: string; jsonBuffer: string }> = new Map();
 
       for await (const event of stream) {
@@ -144,10 +150,20 @@ export class AnthropicProvider extends BaseProvider {
               name: event.content_block.name,
               jsonBuffer: '',
             });
+          } else if (event.content_block.type === 'thinking') {
+            yield { type: 'thinking', thinking: event.content_block.thinking };
+          } else if (event.content_block.type === 'redacted_thinking') {
+            yield {
+              type: 'thinking',
+              thinking: '[Redacted thinking]',
+              thinkingSignature: event.content_block.data,
+            };
           }
         } else if (event.type === 'content_block_delta') {
           if (event.delta.type === 'text_delta') {
             yield { type: 'text', text: event.delta.text };
+          } else if (event.delta.type === 'thinking_delta') {
+            yield { type: 'thinking', thinking: event.delta.thinking };
           } else if (event.delta.type === 'input_json_delta') {
             const pending = pendingToolCalls.get(event.index);
             if (pending) {
@@ -168,8 +184,7 @@ export class AnthropicProvider extends BaseProvider {
                 },
                 isComplete: true,
               };
-            } catch (e) {
-              // If JSON parse fails, yield empty args
+            } catch {
               yield {
                 type: 'tool_use',
                 toolCall: {
@@ -183,59 +198,181 @@ export class AnthropicProvider extends BaseProvider {
           }
         }
       }
-      
+
+      try {
+        const finalMessage = await stream.finalMessage();
+        if (finalMessage.usage) {
+          yield {
+            type: 'usage',
+            usage: {
+              inputTokens: finalMessage.usage.input_tokens,
+              outputTokens: finalMessage.usage.output_tokens,
+              cacheCreationTokens: finalMessage.usage.cache_creation_input_tokens ?? undefined,
+              cacheReadTokens: finalMessage.usage.cache_read_input_tokens ?? undefined,
+            },
+          };
+        }
+      } catch {
+        logger.debug('Could not extract final usage data from stream');
+      }
+
       logger.debug('Stream completed successfully');
-    } catch (error: any) {
+    } catch (error: unknown) {
       this.handleError(error);
     }
   }
 
-  /**
-   * Handle API errors with appropriate error types
-   */
-  private handleError(error: any): never {
-    if (error.status === 401) {
+  private applySystemPrompt(
+    params: Record<string, any>,
+    systemPrompt: string,
+    cacheControl?: boolean
+  ): void {
+    if (!systemPrompt) return;
+
+    if (cacheControl) {
+      params.system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
+    } else {
+      params.system = systemPrompt;
+    }
+  }
+
+  private applyThinking(
+    params: Record<string, any>,
+    thinking?: boolean | { type: 'adaptive'; display?: 'summarized' | 'omitted' }
+  ): void {
+    if (!thinking) return;
+
+    if (thinking === true) {
+      params.thinking = { type: 'adaptive', display: 'summarized' };
+    } else {
+      params.thinking = { type: 'adaptive', display: thinking.display || 'summarized' };
+    }
+  }
+
+  private applyEffort(
+    params: Record<string, any>,
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  ): void {
+    if (effort) {
+      params.output_config = { ...(params.output_config || {}), effort };
+    }
+  }
+
+  private handleError(error: unknown): never {
+    if (error instanceof Anthropic.AuthenticationError) {
       throw new ApiKeyMissingError('anthropic');
     }
 
-    if (error.status === 429) {
-      const retryAfter = error.headers?.['retry-after'];
+    if (error instanceof Anthropic.RateLimitError) {
+      const retryAfter = error.headers?.get('retry-after');
       throw new ApiRateLimitError(
         'anthropic',
         retryAfter ? parseInt(retryAfter) : undefined
       );
     }
 
-    if (error.error?.type === 'authentication_error') {
-      throw new ApiKeyMissingError('anthropic');
+    if (error instanceof Anthropic.BadRequestError) {
+      throw new ApiRequestError(
+        `Anthropic API error: ${error.message}`,
+        'anthropic',
+        { originalError: error }
+      );
+    }
+
+    if (error instanceof Anthropic.PermissionDeniedError) {
+      throw new ApiRequestError(
+        `Anthropic permission error: ${error.message}`,
+        'anthropic',
+        { originalError: error }
+      );
+    }
+
+    if (error instanceof Anthropic.NotFoundError) {
+      throw new ApiRequestError(
+        `Anthropic resource not found: ${error.message}`,
+        'anthropic',
+        { originalError: error }
+      );
+    }
+
+    if (error instanceof Anthropic.InternalServerError) {
+      throw new ApiRequestError(
+        `Anthropic server error: ${error.message}`,
+        'anthropic',
+        { originalError: error }
+      );
+    }
+
+    if (error instanceof Anthropic.APIConnectionError) {
+      throw new ApiRequestError(
+        `Anthropic connection error: ${error.message}`,
+        'anthropic',
+        { originalError: error }
+      );
     }
 
     throw new ApiRequestError(
-      `Anthropic API error: ${error.message || 'Unknown error'}`,
+      `Anthropic API error: ${error instanceof Error ? error.message : 'Unknown error'}`,
       'anthropic',
       { originalError: error }
     );
   }
 
+  private mapStopReason(stopReason: string | null): AIResponse['stopReason'] {
+    switch (stopReason) {
+      case 'end_turn': return 'end_turn';
+      case 'tool_use': return 'tool_use';
+      case 'max_tokens': return 'max_tokens';
+      case 'refusal': return 'refusal';
+      case 'model_context_window_exceeded': return 'model_context_window_exceeded';
+      case 'pause_turn': return 'pause_turn';
+      default: return 'end_turn';
+    }
+  }
+
   private formatMessages(
     messages: Message[],
-    systemPrompt?: string
+    systemPrompt?: string,
+    cacheControl?: boolean
   ): { systemPrompt: string; formattedMessages: Anthropic.Messages.MessageParam[] } {
     const formatted: Anthropic.Messages.MessageParam[] = [];
     let system = systemPrompt || '';
 
-    for (const msg of messages) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
       if (msg.role === 'system') {
         system = typeof msg.content === 'string' ? msg.content : system;
       } else if (msg.role === 'user') {
-        formatted.push({
-          role: 'user',
-          content: typeof msg.content === 'string' ? msg.content : this.formatContentBlocks(msg.content),
-        });
+        const isLastUserMessage = cacheControl &&
+          i === messages.length - 1 &&
+          msg.role === 'user';
+
+        if (typeof msg.content === 'string') {
+          if (isLastUserMessage) {
+            formatted.push({
+              role: 'user',
+              content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
+            });
+          } else {
+            formatted.push({ role: 'user', content: msg.content });
+          }
+        } else {
+          formatted.push({
+            role: 'user',
+            content: this.formatContentBlocks(msg.content, isLastUserMessage),
+          });
+        }
       } else if (msg.role === 'assistant') {
         formatted.push({
           role: 'assistant',
           content: typeof msg.content === 'string' ? msg.content : this.formatContentBlocks(msg.content),
+        });
+      } else if (msg.role === 'tool') {
+        formatted.push({
+          role: 'user',
+          content: typeof msg.content === 'string'
+            ? [{ type: 'tool_result', tool_use_id: msg.toolCallId || '', content: msg.content }]
+            : this.formatContentBlocks(msg.content),
         });
       }
     }
@@ -243,11 +380,18 @@ export class AnthropicProvider extends BaseProvider {
     return { systemPrompt: system, formattedMessages: formatted };
   }
 
-  private formatContentBlocks(blocks: any[]): Anthropic.Messages.ContentBlockParam[] {
+  private formatContentBlocks(blocks: any[], cacheLastBlock = false): Anthropic.Messages.ContentBlockParam[] {
     const result: Anthropic.Messages.ContentBlockParam[] = [];
-    for (const block of blocks) {
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i];
+      const isLast = cacheLastBlock && i === blocks.length - 1;
+
       if (block.type === 'text') {
-        result.push({ type: 'text', text: block.text || '' });
+        const textBlock: Anthropic.Messages.TextBlockParam = { type: 'text', text: block.text || '' };
+        if (isLast) {
+          (textBlock as any).cache_control = { type: 'ephemeral' };
+        }
+        result.push(textBlock);
       } else if (block.type === 'tool_use') {
         result.push({
           type: 'tool_use',
@@ -256,12 +400,13 @@ export class AnthropicProvider extends BaseProvider {
           input: block.input || {},
         });
       } else if (block.type === 'tool_result') {
-        result.push({
+        const toolResultBlock: Anthropic.Messages.ToolResultBlockParam = {
           type: 'tool_result',
           tool_use_id: block.tool_use_id || block.toolUseId || '',
-          content: block.content || '',
+          content: typeof block.content === 'string' ? block.content : (block.content || ''),
           is_error: block.is_error || block.isError || false,
-        } as any);
+        };
+        result.push(toolResultBlock as Anthropic.Messages.ContentBlockParam);
       }
     }
     return result;

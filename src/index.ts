@@ -21,7 +21,7 @@ if (process.env.DRAGON_DEBUG === 'true') {
 
 program
   .name('dragon')
-  .description('Multi-provider AI CLI tool - your intelligent coding companion')
+  .description('Multi-provider AI CLI tool powered by Claude API - your intelligent coding companion')
   .version(VERSION)
   .option('--monitor', 'Enable performance monitoring');
 
@@ -161,7 +161,7 @@ program
 program
   .action(async () => {
     console.log(chalk.cyan(figlet.textSync('Dragon', { font: 'Standard' })));
-    console.log(chalk.dim(`Multi-provider AI CLI v${VERSION}`));
+    console.log(chalk.dim(`Multi-provider AI CLI with Claude API v${VERSION}`));
     console.log();
 
     try {

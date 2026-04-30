@@ -28,7 +28,7 @@ export class WriteTool extends BaseTool {
     try {
       let targetPath: string;
       try {
-        targetPath = this.resolvePath(file_path, context);
+        targetPath = this.resolvePath(file_path, context, 'write');
       } catch (pathError: any) {
         return {
           success: false,

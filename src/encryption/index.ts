@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ConfigError, ErrorCode } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
@@ -9,6 +10,13 @@ const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
 const SALT_LENGTH = 64;
 const ITERATIONS = 100000;
+
+// Magic header for reliable encrypted value detection: "DRA" + version byte
+const ENCRYPTED_PREFIX = Buffer.from([0x44, 0x52, 0x41]);
+const ENCRYPT_FORMAT_VERSION = 1;
+const PREFIX_LENGTH = ENCRYPTED_PREFIX.length + 1; // 3 magic + 1 version
+
+const logger = getLogger();
 
 /**
  * Encryption service for securing sensitive data like API keys
@@ -46,10 +54,11 @@ export class EncryptionService {
         fs.writeFileSync(this.keyPath, encryptedKey);
         fs.chmodSync(this.keyPath, 0o600); // Only owner can read/write
       } else {
-        // Save plain key (development mode - not recommended for production)
+        // Save plain key (not recommended - password protection is strongly advised)
         await this.ensureDirectoryExists();
         fs.writeFileSync(this.keyPath, this.masterKey);
         fs.chmodSync(this.keyPath, 0o600);
+        logger.warn('Master key stored without password encryption. Use --encrypt for stronger protection.');
       }
     }
   }
@@ -65,15 +74,19 @@ export class EncryptionService {
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ALGORITHM, this.masterKey, iv);
 
+    const plaintextBuf = Buffer.from(plaintext, 'utf8');
     const encrypted = Buffer.concat([
-      cipher.update(plaintext, 'utf8'),
+      cipher.update(plaintextBuf),
       cipher.final(),
     ]);
+    plaintextBuf.fill(0); // Wipe plaintext from memory
 
     const authTag = cipher.getAuthTag();
 
-    // Combine IV, auth tag, and encrypted data
-    const result = Buffer.concat([iv, authTag, encrypted]);
+    const versionByte = Buffer.from([ENCRYPT_FORMAT_VERSION]);
+
+    // Format: magic(3) | version(1) | IV(16) | authTag(16) | ciphertext
+    const result = Buffer.concat([ENCRYPTED_PREFIX, versionByte, iv, authTag, encrypted]);
 
     return result.toString('base64');
   }
@@ -88,9 +101,26 @@ export class EncryptionService {
 
     const data = Buffer.from(ciphertext, 'base64');
 
-    const iv = data.subarray(0, IV_LENGTH);
-    const authTag = data.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
-    const encrypted = data.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
+    // Verify magic header
+    if (!this.hasValidPrefix(data)) {
+      throw new ConfigError(
+        'Invalid encrypted data: missing or corrupted header',
+        ErrorCode.CONFIG_INVALID
+      );
+    }
+
+    const version = data[ENCRYPTED_PREFIX.length];
+    if (version !== ENCRYPT_FORMAT_VERSION) {
+      throw new ConfigError(
+        `Unsupported encryption format version: ${version}`,
+        ErrorCode.CONFIG_INVALID
+      );
+    }
+
+    const payloadStart = PREFIX_LENGTH;
+    const iv = data.subarray(payloadStart, payloadStart + IV_LENGTH);
+    const authTag = data.subarray(payloadStart + IV_LENGTH, payloadStart + IV_LENGTH + AUTH_TAG_LENGTH);
+    const encrypted = data.subarray(payloadStart + IV_LENGTH + AUTH_TAG_LENGTH);
 
     const decipher = crypto.createDecipheriv(ALGORITHM, this.masterKey, iv);
     decipher.setAuthTag(authTag);
@@ -100,7 +130,9 @@ export class EncryptionService {
       decipher.final(),
     ]);
 
-    return decrypted.toString('utf8');
+    const result = decrypted.toString('utf8');
+    decrypted.fill(0); // Wipe decrypted data from memory after use
+    return result;
   }
 
   /**
@@ -109,11 +141,33 @@ export class EncryptionService {
   isEncrypted(value: string): boolean {
     try {
       const data = Buffer.from(value, 'base64');
-      // Check if it has the expected structure (IV + auth tag + some data)
-      return data.length > IV_LENGTH + AUTH_TAG_LENGTH;
+      return this.hasValidPrefix(data);
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Verify the magic header bytes are present
+   */
+  private hasValidPrefix(data: Buffer): boolean {
+    if (data.length < PREFIX_LENGTH) return false;
+    return ENCRYPTED_PREFIX.equals(data.subarray(0, ENCRYPTED_PREFIX.length));
+  }
+
+  /**
+   * Timing-safe comparison of two buffers
+   */
+  static timingSafeEqual(a: Buffer, b: Buffer): boolean {
+    if (a.length !== b.length) {
+      // Still do a constant-time comparison to avoid length-based timing leaks
+      crypto.timingSafeEqual(
+        Buffer.alloc(Math.max(a.length, b.length)),
+        Buffer.alloc(Math.max(a.length, b.length))
+      );
+      return false;
+    }
+    return crypto.timingSafeEqual(a, b);
   }
 
   /**
@@ -121,8 +175,7 @@ export class EncryptionService {
    */
   private async encryptKey(key: Buffer, password: string): Promise<Buffer> {
     const salt = crypto.randomBytes(SALT_LENGTH);
-    
-    // Derive key from password
+
     const derivedKey = await new Promise<Buffer>((resolve, reject) => {
       crypto.pbkdf2(password, salt, ITERATIONS, KEY_LENGTH, 'sha512', (err, key) => {
         if (err) reject(err);
@@ -139,8 +192,8 @@ export class EncryptionService {
     ]);
 
     const authTag = cipher.getAuthTag();
+    derivedKey.fill(0); // Wipe derived key from memory
 
-    // Combine salt, IV, auth tag, and encrypted key
     return Buffer.concat([salt, iv, authTag, encrypted]);
   }
 
@@ -153,7 +206,6 @@ export class EncryptionService {
     const authTag = encryptedKey.subarray(SALT_LENGTH + IV_LENGTH, SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH);
     const encrypted = encryptedKey.subarray(SALT_LENGTH + IV_LENGTH + AUTH_TAG_LENGTH);
 
-    // Derive key from password
     const derivedKey = await new Promise<Buffer>((resolve, reject) => {
       crypto.pbkdf2(password, salt, ITERATIONS, KEY_LENGTH, 'sha512', (err, key) => {
         if (err) reject(err);
@@ -164,10 +216,12 @@ export class EncryptionService {
     const decipher = crypto.createDecipheriv(ALGORITHM, derivedKey, iv);
     decipher.setAuthTag(authTag);
 
-    return Buffer.concat([
+    const result = Buffer.concat([
       decipher.update(encrypted),
       decipher.final(),
     ]);
+    derivedKey.fill(0); // Wipe derived key from memory
+    return result;
   }
 
   /**
@@ -249,7 +303,7 @@ export class SecureConfigManager {
           }
         } catch (error) {
           // If decryption fails, keep original value
-          console.warn(`Failed to decrypt field ${key}`);
+          logger.warn(`Failed to decrypt sensitive field`);
         }
       } else if (typeof decrypted[key] === 'object' && decrypted[key] !== null) {
         decrypted[key] = this.decryptConfig(decrypted[key]);
@@ -263,9 +317,9 @@ export class SecureConfigManager {
    * Check if a field name is sensitive
    */
   private isSensitiveField(fieldName: string): boolean {
-    const lowerName = fieldName.toLowerCase();
-    return this.sensitiveFields.some(sensitive => 
-      lowerName.includes(sensitive.toLowerCase())
+    const lower = fieldName.toLowerCase();
+    return this.sensitiveFields.some(sensitive =>
+      lower.includes(sensitive.toLowerCase())
     );
   }
 }

@@ -14,6 +14,22 @@ import type { AIProvider } from '../providers/index.js';
 
 export * from './base.js';
 
+// Per-tool-type limits: bash is the most dangerous, read-only tools get higher limits
+const PER_TOOL_SESSION_LIMITS: Record<string, number> = {
+  bash: 50,
+  write: 100,
+  edit: 100,
+  agent: 10,
+  webfetch: 50,
+  websearch: 50,
+};
+
+const DEFAULT_PER_TOOL_LIMIT = 200;
+
+// Danger-level categories for tool call gating
+const DANGEROUS_TOOLS = new Set(['bash', 'write', 'edit']);
+const NETWORK_TOOLS = new Set(['webfetch', 'websearch']);
+
 export class ToolRegistry {
   private tools: Map<string, BaseTool> = new Map();
   private context: ToolContext;
@@ -23,6 +39,9 @@ export class ToolRegistry {
   private maxToolCallsPerTurn: number = 25;
   private maxOutputSize: number = 100000;
   private toolCallCountThisTurn: number = 0;
+  private perToolCallCounts: Map<string, number> = new Map();
+  private networkCallsThisTurn: number = 0;
+  private maxNetworkCallsPerTurn: number = 10;
 
   constructor(workingDirectory: string = process.cwd()) {
     this.context = { workingDirectory };
@@ -62,6 +81,22 @@ export class ToolRegistry {
     this.context.permissions = permissions;
   }
 
+  /**
+   * Set workspace scope paths for read and write operations.
+   * @param paths - Workspace root paths for write operations
+   * @param readPaths - Additional paths for read operations (defaults to paths + home)
+   */
+  setWorkspaceScope(paths: string[], readPaths?: string[]) {
+    if (paths.length > 0) {
+      this.context.writeScope = paths;
+      this.context.readScope = readPaths || [
+        ...paths,
+        ...(process.env.HOME ? [process.env.HOME] : []),
+      ];
+      this.context.allowedPaths = paths; // backward compat
+    }
+  }
+
   setExecutionLimits(limits?: { maxToolCallsPerTurn?: number; maxTotalToolCalls?: number; maxOutputSize?: number }) {
     if (limits?.maxToolCallsPerTurn) this.maxToolCallsPerTurn = limits.maxToolCallsPerTurn;
     if (limits?.maxTotalToolCalls) this.maxTotalToolCalls = limits.maxTotalToolCalls;
@@ -70,6 +105,7 @@ export class ToolRegistry {
 
   resetTurnCounter() {
     this.toolCallCountThisTurn = 0;
+    this.networkCallsThisTurn = 0;
   }
 
   getTotalToolCalls(): number {
@@ -121,6 +157,31 @@ export class ToolRegistry {
         output: `Session tool call limit reached: max ${this.maxTotalToolCalls} tool calls.`,
         error: 'Session tool call limit exceeded',
       };
+    }
+
+    // Check per-tool-type session limits
+    const toolLimit = PER_TOOL_SESSION_LIMITS[toolCall.name] ?? DEFAULT_PER_TOOL_LIMIT;
+    const toolCalls = (this.perToolCallCounts.get(toolCall.name) || 0) + 1;
+    this.perToolCallCounts.set(toolCall.name, toolCalls);
+
+    if (toolCalls > toolLimit) {
+      return {
+        success: false,
+        output: `Tool "${toolCall.name}" limit reached: max ${toolLimit} calls per session.`,
+        error: 'Per-tool session limit exceeded',
+      };
+    }
+
+    // Check network tool per-turn limit
+    if (NETWORK_TOOLS.has(toolCall.name)) {
+      this.networkCallsThisTurn++;
+      if (this.networkCallsThisTurn > this.maxNetworkCallsPerTurn) {
+        return {
+          success: false,
+          output: `Network tool call limit reached: max ${this.maxNetworkCallsPerTurn} per turn.`,
+          error: 'Network tool call limit exceeded',
+        };
+      }
     }
 
     const tool = this.tools.get(toolCall.name);

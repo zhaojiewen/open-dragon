@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import path from 'path';
+import fs from 'fs';
 import os from 'os';
 import { ToolParameterSchema } from '../providers/base.js';
 import type { ToolParameters } from '../providers/base.js';
@@ -15,6 +16,10 @@ export interface ToolContext {
   permissions?: string[];
   /** Optional list of paths the tool is allowed to access. Defaults to workingDirectory only. */
   allowedPaths?: string[];
+  /** Paths within which read operations are allowed. If unset, falls back to default (cwd + home + tmp). */
+  readScope?: string[];
+  /** Paths within which write operations (write/edit/bash) are allowed. If unset, falls back to allowedPaths or default. */
+  writeScope?: string[];
 }
 
 export abstract class BaseTool {
@@ -55,7 +60,11 @@ export abstract class BaseTool {
    * Default allowed roots: working directory, home dir, temp dir, .dragon config.
    * If allowedPaths is explicitly provided, only those paths are allowed.
    */
-  protected resolvePath(filePath: string, context?: ToolContext): string {
+  protected resolvePath(
+    filePath: string,
+    context?: ToolContext,
+    scope: 'read' | 'write' = 'read',
+  ): string {
     let targetPath = filePath;
 
     if (!path.isAbsolute(filePath) && context?.workingDirectory) {
@@ -64,47 +73,93 @@ export abstract class BaseTool {
 
     const resolved = path.resolve(targetPath);
 
-    // Block critical system paths
+    // Resolve symlinks to the real path to prevent symlink-based traversal
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(resolved);
+    } catch {
+      // File doesn't exist yet (e.g., write tool) — walk up to find an existing ancestor
+      realPath = this.resolveRealPathForMissingFile(resolved);
+    }
+
+    // Block critical system paths (always enforced, even with allowedPaths)
     for (const blocked of BaseTool.BLOCKED_PATHS) {
-      if (resolved === blocked || resolved.startsWith(blocked)) {
+      if (realPath === blocked || realPath.startsWith(blocked + path.sep) || realPath.startsWith(blocked)) {
         throw new Error(
-          `Access to system path "${resolved}" is blocked for security.`
+          `Access to system path "${realPath}" is blocked for security.`
         );
       }
     }
 
-    // If explicit allowedPaths, enforce them strictly
-    if (context?.allowedPaths && context.allowedPaths.length > 0) {
-      const allowedRoots = context.allowedPaths.map(p => path.resolve(p));
-      const isAllowed = allowedRoots.some(root =>
-        resolved.startsWith(root + path.sep) || resolved === root
-      );
-      if (!isAllowed) {
-        throw new Error(
-          `Path traversal blocked: "${filePath}" resolves outside allowed directories. ` +
-          `Allowed: ${allowedRoots.join(', ')}`
-        );
-      }
-      return resolved;
+    // Determine allowed roots based on scope
+    let allowedRoots: string[];
+
+    // Use scope-specific paths first
+    const scopePaths = scope === 'write'
+      ? (context?.writeScope || context?.allowedPaths)
+      : (context?.readScope || context?.allowedPaths);
+
+    if (scopePaths && scopePaths.length > 0) {
+      allowedRoots = scopePaths.map(p => this.resolveRealDir(p));
+    } else if (context?.allowedPaths && context.allowedPaths.length > 0) {
+      allowedRoots = context.allowedPaths.map(p => this.resolveRealDir(p));
+    } else {
+      // No explicit restrictions: allow if within working dir, home dir, or temp dir
+      const workingDir = this.resolveRealDir(context?.workingDirectory || process.cwd());
+      const homeDir = this.resolveRealDir(process.env.HOME || os.homedir());
+      const tempDir = this.resolveRealDir(os.tmpdir());
+      allowedRoots = [workingDir, homeDir, tempDir];
     }
 
-    // No explicit restrictions: allow if within working dir, home dir, or temp dir
-    const workingDir = path.resolve(context?.workingDirectory || process.cwd());
-    const homeDir = path.resolve(process.env.HOME || os.homedir());
-    const tempDir = path.resolve(os.tmpdir());
-
-    const defaultRoots = [workingDir, homeDir, tempDir];
-
-    const isAllowed = defaultRoots.some(root =>
-      resolved.startsWith(root + path.sep) || resolved === root
+    // Use realPath for the final check to catch symlink bypasses
+    const isAllowed = allowedRoots.some(root =>
+      realPath.startsWith(root + path.sep) || realPath === root
     );
 
     if (!isAllowed) {
+      const scopeLabel = scope === 'write' ? 'write' : 'read';
       throw new Error(
-        `Path traversal blocked: "${filePath}" resolves to "${resolved}" which is outside allowed directories.`
+        `${scopeLabel} access blocked: "${filePath}" resolves outside ${scopeLabel} scope. ` +
+        `Allowed: ${allowedRoots.join(', ')}`
       );
     }
 
     return resolved;
+  }
+
+  /**
+   * Walk up the directory tree to find the nearest existing ancestor,
+   * resolve it to the real path, then reconstruct the full path.
+   * Used when the target file doesn't exist yet (e.g., write tool).
+   */
+  private resolveRealPathForMissingFile(resolved: string): string {
+    let current = path.dirname(resolved);
+    const segments: string[] = [path.basename(resolved)];
+
+    while (current && current !== path.dirname(current)) {
+      try {
+        const realAncestor = fs.realpathSync(current);
+        return path.join(realAncestor, ...segments.reverse());
+      } catch {
+        segments.push(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+
+    // All ancestors are missing — fall back to resolved path
+    return resolved;
+  }
+
+  /**
+   * Resolve a directory to its real path (following symlinks).
+   * Falls back to path.resolve if the directory doesn't exist.
+   */
+  protected resolveRealDir(dir: string): string {
+    const resolved = path.resolve(dir);
+    try {
+      return fs.realpathSync(resolved);
+    } catch {
+      return resolved;
+    }
   }
 }

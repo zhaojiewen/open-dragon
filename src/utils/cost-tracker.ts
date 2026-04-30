@@ -10,8 +10,8 @@ const MODEL_PRICING: Record<string, { input: number; output: number }> = {
   'gpt-3.5-turbo': { input: 0.50, output: 1.50 },
   // Anthropic
   'claude-sonnet-4-6': { input: 3.00, output: 15.00 },
-  'claude-opus-4-7': { input: 15.00, output: 75.00 },
-  'claude-haiku-4-5': { input: 0.25, output: 1.25 },
+  'claude-opus-4-7': { input: 5.00, output: 25.00 },
+  'claude-haiku-4-5': { input: 1.00, output: 5.00 },
   // Gemini
   'gemini-1.5-pro': { input: 2.50, output: 10.00 },
   'gemini-1.5-flash': { input: 0.15, output: 0.60 },
@@ -62,6 +62,11 @@ export class CostTracker {
       input: this.records.reduce((sum, r) => sum + r.inputTokens, 0),
       output: this.records.reduce((sum, r) => sum + r.outputTokens, 0),
     };
+  }
+
+  getTotalTokens(): number {
+    const t = this.getSessionTokens();
+    return t.input + t.output;
   }
 
   getRecords(): UsageRecord[] {

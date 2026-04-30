@@ -31,11 +31,21 @@ export const LogConfigSchema = z.object({
 
 export type LogConfig = z.infer<typeof LogConfigSchema>;
 
+export const WorkspaceConfigSchema = z.object({
+  paths: z.array(z.string()).default([]).describe('Allowed workspace root directories'),
+  writeEnabled: z.boolean().default(true).describe('Allow write operations within workspace'),
+  enforceBounds: z.boolean().default(true).describe('Enforce workspace boundary for all file operations'),
+  allowHomeDir: z.boolean().default(true).describe('Allow read access to home directory config files'),
+});
+
+export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
+
 export const DragonConfigSchema = z.object({
   defaultProvider: z.string().default('anthropic'),
   providers: z.record(z.string(), ProviderConfigSchema).default({}),
   tools: ToolsConfigSchema.optional(),
   logging: LogConfigSchema.optional(),
+  workspace: WorkspaceConfigSchema.optional(),
 }).refine((config) => {
   // Validate that defaultProvider exists in providers
   if (Object.keys(config.providers).length > 0 && !config.providers[config.defaultProvider]) {
@@ -69,8 +79,8 @@ export const DEFAULT_CONFIG: DragonConfig = {
       defaultModel: 'gpt-4o',
     },
     anthropic: {
-      models: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-haiku-4-5'],
-      defaultModel: 'claude-sonnet-4-6',
+      models: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
+      defaultModel: 'claude-opus-4-7',
     },
     gemini: {
       models: ['gemini-1.5-pro', 'gemini-1.5-flash'],
@@ -100,5 +110,11 @@ export const DEFAULT_CONFIG: DragonConfig = {
   logging: {
     level: 'info',
     enableConsole: true,
+  },
+  workspace: {
+    paths: [],
+    writeEnabled: true,
+    enforceBounds: false,
+    allowHomeDir: true,
   },
 };

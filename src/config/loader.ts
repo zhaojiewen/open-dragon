@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import chalk from 'chalk';
 import { DragonConfigSchema, DEFAULT_CONFIG } from './schema.js';
 import type { DragonConfig } from './schema.js';
 import { ConfigNotFoundError, ConfigInvalidError } from '../utils/errors.js';
@@ -90,6 +91,7 @@ export async function initConfig(
     return;
   }
 
+  const cwd = process.cwd();
   const templateConfig = {
     ...DEFAULT_CONFIG,
     providers: {
@@ -98,6 +100,12 @@ export async function initConfig(
       gemini: { ...DEFAULT_CONFIG.providers.gemini, apiKey: 'YOUR_GEMINI_API_KEY' },
       deepseek: { ...DEFAULT_CONFIG.providers.deepseek, apiKey: 'YOUR_DEEPSEEK_API_KEY' },
       qwen: { ...DEFAULT_CONFIG.providers.qwen, apiKey: 'YOUR_QWEN_API_KEY' },
+    },
+    workspace: {
+      paths: [cwd],
+      writeEnabled: true,
+      enforceBounds: true,
+      allowHomeDir: true,
     },
   };
 
@@ -112,6 +120,8 @@ export async function initConfig(
   fs.chmodSync(CONFIG_FILE, 0o600);
   logger.info(`Configuration file created at ${CONFIG_FILE}`);
   console.log(`Configuration file created at ${CONFIG_FILE}`);
+  console.log(chalk.dim ? chalk.dim(`Workspace: ${cwd}`) : `Workspace: ${cwd}`);
+  console.log(chalk.dim ? chalk.dim('Edit workspace paths in ~/.dragon/config.json → workspace.paths') : 'Edit workspace paths in ~/.dragon/config.json → workspace.paths');
 }
 
 function ensureConfigDirectory(): void {

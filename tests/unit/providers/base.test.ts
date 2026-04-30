@@ -122,4 +122,60 @@ describe('BaseProvider', () => {
     expect(chunks).toHaveLength(1);
     expect(chunks[0].text).toBe('test');
   });
+
+  it('should yield thinking chunk type', async () => {
+    const thinkingProvider = new class extends BaseProvider {
+      readonly name = 'thinking-test';
+      protected apiKey = 'test-key';
+      protected models = ['model-1'];
+      protected defaultModel = 'model-1';
+
+      async chat(): Promise<AIResponse> {
+        return { content: '', stopReason: 'end_turn' };
+      }
+
+      async *stream(): AsyncGenerator<StreamChunk> {
+        yield { type: 'thinking', thinking: 'Let me think...' };
+      }
+    }();
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of thinkingProvider.stream([])) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('thinking');
+    expect(chunks[0].thinking).toBe('Let me think...');
+  });
+
+  it('should yield usage chunk type', async () => {
+    const usageProvider = new class extends BaseProvider {
+      readonly name = 'usage-test';
+      protected apiKey = 'test-key';
+      protected models = ['model-1'];
+      protected defaultModel = 'model-1';
+
+      async chat(): Promise<AIResponse> {
+        return { content: '', stopReason: 'end_turn' };
+      }
+
+      async *stream(): AsyncGenerator<StreamChunk> {
+        yield {
+          type: 'usage',
+          usage: { inputTokens: 100, outputTokens: 50, cacheCreationTokens: 20, cacheReadTokens: 30 },
+        };
+      }
+    }();
+
+    const chunks: StreamChunk[] = [];
+    for await (const chunk of usageProvider.stream([])) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].type).toBe('usage');
+    expect(chunks[0].usage?.inputTokens).toBe(100);
+    expect(chunks[0].usage?.outputTokens).toBe(50);
+    expect(chunks[0].usage?.cacheCreationTokens).toBe(20);
+    expect(chunks[0].usage?.cacheReadTokens).toBe(30);
+  });
 });

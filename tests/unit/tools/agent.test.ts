@@ -133,13 +133,13 @@ describe('AgentTool', () => {
     await agentTool.execute({
       description: 'Test task',
       prompt: 'Do something',
-      model: 'custom-model',
+      model: 'claude-haiku-4-5',
     });
 
     const callArgs = mockProvider.chat.mock.calls[0];
     const options = callArgs[2];
 
-    expect(options?.model).toBe('custom-model');
+    expect(options?.model).toBe('claude-haiku-4-5');
   });
 
   it('should handle multiple turns until end_turn', async () => {

@@ -29,7 +29,7 @@ export class ReadTool extends BaseTool {
     try {
       let targetPath: string;
       try {
-        targetPath = this.resolvePath(file_path, context);
+        targetPath = this.resolvePath(file_path, context, 'read');
       } catch (pathError: any) {
         return {
           success: false,

@@ -46,18 +46,28 @@ export interface ContentBlock {
 export interface AIResponse {
   content: string;
   toolCalls?: ToolCall[];
-  stopReason: 'end_turn' | 'tool_use' | 'max_tokens';
+  stopReason: 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'model_context_window_exceeded' | 'pause_turn';
   usage?: {
     inputTokens: number;
     outputTokens: number;
+    cacheCreationTokens?: number;
+    cacheReadTokens?: number;
   };
 }
 
 export interface StreamChunk {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'usage';
   text?: string;
+  thinking?: string;
+  thinkingSignature?: string;
   toolCall?: Partial<ToolCall>;
   isComplete?: boolean;
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens?: number;
+    cacheReadTokens?: number;
+  };
 }
 
 export interface AIProvider {
@@ -79,8 +89,11 @@ export interface AIProvider {
 export interface ChatOptions {
   model?: string;
   maxTokens?: number;
-  temperature?: number;
   systemPrompt?: string;
+  thinking?: boolean | { type: 'adaptive'; display?: 'summarized' | 'omitted' };
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  cacheControl?: boolean;
+  tokenSaveMode?: boolean;
 }
 
 export abstract class BaseProvider implements AIProvider {

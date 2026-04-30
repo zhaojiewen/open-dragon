@@ -41,11 +41,25 @@ export class AgentTool extends BaseTool {
       };
     }
 
+    // Restrict model override: only allow downgrading to cheaper/faster models
+    if (model) {
+      const allowedModels = this.getAllowedAgentModels();
+      if (!allowedModels.includes(model)) {
+        return {
+          success: false,
+          output: `Model override not allowed. Agent only supports: ${allowedModels.join(', ')}`,
+          error: 'Model not allowed for agents',
+        };
+      }
+    }
+
     try {
       const systemPrompt = `You are a specialized agent working on a focused task.
 ${context?.workingDirectory ? `Working directory: ${context.workingDirectory}` : ''}
 
 Complete the task and provide a clear summary of what you did.
+
+IMPORTANT: You are running in a sandboxed sub-agent context. Your task is limited in scope and duration. Be focused and concise.
 
 Task: ${description}`;
 
@@ -60,8 +74,8 @@ Task: ${description}`;
 
       for (let turn = 0; turn < maxTurns; turn++) {
         const response = await this.provider.chat(currentMessages, undefined, {
-          model,
-          maxTokens: 4096,
+          model: model || this.provider.getDefaultModel(),
+          maxTokens: 16000,
         });
 
         if (response.stopReason === 'end_turn' || !response.toolCalls) {
@@ -77,8 +91,8 @@ Task: ${description}`;
           content: response.content || '',
         });
 
-        // For now, we don't execute tool calls in sub-agent
-        // This can be extended to allow tool use
+        // Note: Sub-agents do not execute tool calls for security
+        // This prevents unbounded tool execution chains
       }
 
       return {
@@ -92,5 +106,24 @@ Task: ${description}`;
         error: error.message,
       };
     }
+  }
+
+  /**
+   * Only allow non-Opus models for sub-agents to prevent cost exploitation.
+   */
+  private getAllowedAgentModels(): string[] {
+    const providerModels = this.provider ? this.getProviderModels() : [];
+    // Filter out most expensive models for sub-agent use
+    const excludedPatterns = [/claude-opus/i, /gpt-4[^-]/i];
+    return providerModels.filter(m => !excludedPatterns.some(p => p.test(m)));
+  }
+
+  private getProviderModels(): string[] {
+    // Sub-agents can use any model from the provider that isn't Opus-tier
+    return [
+      'claude-haiku-4-5',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5-20251001',
+    ];
   }
 }

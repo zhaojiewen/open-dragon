@@ -1,6 +1,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import fs from 'fs';
 import { BaseTool, ToolExecuteResult, ToolContext } from './base.js';
 import { z } from 'zod';
 import { ToolParameterSchema } from '../providers/base.js';
@@ -47,6 +48,16 @@ export class BashTool extends BaseTool {
       }
     }
 
+    // Check workspace boundaries for file paths in the command
+    const workspaceCheck = this.checkWorkspacePaths(command, context);
+    if (workspaceCheck) {
+      return {
+        success: false,
+        output: workspaceCheck,
+        error: 'Workspace boundary violation',
+      };
+    }
+
     try {
       const options: any = {
         maxBuffer: 1024 * 1024 * 10, // 10MB buffer
@@ -56,6 +67,9 @@ export class BashTool extends BaseTool {
       if (context?.workingDirectory) {
         options.cwd = context.workingDirectory;
       }
+
+      // Strip sensitive environment variables from child process
+      options.env = this.sanitizeEnv(process.env);
 
       const { stdout, stderr } = await execAsync(command, options);
 
@@ -74,6 +88,24 @@ export class BashTool extends BaseTool {
         error: error.message,
       };
     }
+  }
+
+  /**
+   * Strip sensitive environment variables before passing to child process.
+   */
+  private sanitizeEnv(env: typeof process.env): Record<string, string | undefined> {
+    const sensitivePatterns = [
+      /api[_-]?key/i, /token/i, /secret/i, /password/i,
+      /credential/i, /auth/i, /private[_-]?key/i,
+      /DRAGON_PASSWORD/i,
+    ];
+
+    const sanitized: Record<string, string | undefined> = {};
+    for (const [key, value] of Object.entries(env)) {
+      const isSensitive = sensitivePatterns.some(p => p.test(key));
+      sanitized[key] = isSensitive ? undefined : value;
+    }
+    return sanitized;
   }
 
   /**
@@ -102,9 +134,13 @@ export class BashTool extends BaseTool {
 
     for (const { pattern, reason } of destructiveCommands) {
       if (pattern.test(trimmed)) {
-        return `Command blocked: ${reason}. Use dangerouslyDisableSandbox to allow, or rephrase your command.`;
+        return `Command blocked: ${reason}. To bypass: set "dangerouslyDisableSandbox": true in ~/.dragon/config.json → tools.bash. Or rephrase your command.`;
       }
     }
+
+    // Check for command substitution bypasses that could execute blocked commands
+    const substitutionCheck = this.checkCommandSubstitution(trimmed);
+    if (substitutionCheck) return substitutionCheck;
 
     // Block recursive delete of important directories
     const safeDeleteCheck = this.checkSafeDelete(trimmed);
@@ -153,6 +189,92 @@ export class BashTool extends BaseTool {
         if (target.startsWith(blocked)) {
           return `Blocked: writing to system path "${target}" is not allowed.`;
         }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect command substitution bypasses ($(), backticks, eval) that could
+   * be used to execute blocked commands.
+   */
+  private checkCommandSubstitution(command: string): string | null {
+    // Detect $(...) subshells that wrap blocked commands
+    const subShellMatch = command.match(/\$\((.*?)\)/);
+    if (subShellMatch) {
+      const inner = subShellMatch[1].trim();
+      const lower = inner.toLowerCase();
+      if (/\bsudo\b|\bdd\b|\bmkfs\b|\bshutdown\b|\breboot\b|\bkill\b|\bkillall\b/.test(lower)) {
+        return `Blocked: command substitution "$(${inner})" attempts to run a blocked command.`;
+      }
+    }
+
+    // Detect backtick subshells
+    const backtickMatch = command.match(/`(.*?)`/);
+    if (backtickMatch) {
+      const inner = backtickMatch[1].trim();
+      const lower = inner.toLowerCase();
+      if (/\bsudo\b|\bdd\b|\bmkfs\b|\bshutdown\b|\breboot\b|\bkill\b|\bkillall\b/.test(lower)) {
+        return `Blocked: backtick substitution executes a blocked command.`;
+      }
+    }
+
+    // Detect eval usage that could bypass restrictions
+    if (/\beval\s/.test(command)) {
+      return `Blocked: eval can be used to bypass command restrictions.`;
+    }
+
+    // Detect base64 or hex-encoded command execution
+    if (/\b(?:base64|xxd|od)\s.*-d(?:ecode)?\b.*\||\|.*\b(?:base64|xxd|od)\s.*-d(?:ecode)?\b/.test(command)) {
+      return `Blocked: decoded command execution can bypass restrictions.`;
+    }
+
+    // Detect attempts to source/execute temporary scripts
+    if (/\bsource\s+<\(/.test(command) || /\b\.\s+<\(/.test(command)) {
+      return `Blocked: process substitution with source can bypass restrictions.`;
+    }
+
+    return null;
+  }
+
+  /**
+   * Validate that file paths in the command are within the allowed workspace.
+   * Returns an error message if any path is outside the write scope, or null if safe.
+   */
+  private checkWorkspacePaths(command: string, context?: ToolContext): string | null {
+    // Only enforce if writeScope or allowedPaths are explicitly set
+    const scopePaths = context?.writeScope || context?.allowedPaths;
+    if (!scopePaths || scopePaths.length === 0) return null;
+
+    const paths = this.extractPaths(command);
+    for (const rawPath of paths) {
+      try {
+        // Expand tilde and resolve
+        const expanded = rawPath.startsWith('~')
+          ? path.join(process.env.HOME || '/', rawPath.slice(1))
+          : rawPath;
+        const resolved = path.resolve(context?.workingDirectory || process.cwd(), expanded);
+
+        // Get real path if it exists, otherwise resolve parent
+        let realPath = resolved;
+        try { realPath = fs.realpathSync(resolved); } catch {
+          const parent = path.dirname(resolved);
+          try { realPath = path.join(fs.realpathSync(parent), path.basename(resolved)); } catch {}
+        }
+
+        // Check if this path is within the allowed scope
+        const isAllowed = scopePaths.some(root => {
+          const realRoot = this.resolveRealDir(root);
+          return realPath.startsWith(realRoot + path.sep) || realPath === realRoot;
+        });
+
+        if (!isAllowed) {
+          return `Workspace boundary: "${rawPath}" is outside the allowed workspace. ` +
+            `Workspace: ${scopePaths.join(', ')}`;
+        }
+      } catch {
+        // If we can't resolve the path, allow it (conservative)
       }
     }
 
