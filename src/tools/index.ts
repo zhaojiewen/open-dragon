@@ -135,6 +135,24 @@ export class ToolRegistry {
     return enabledTools.filter(name => this.tools.has(name));
   }
 
+  private truncateOutput(output: string): string {
+    // For very small maxOutputSize (e.g. < 200 chars), just do simple truncation
+    if (this.maxOutputSize < 200) {
+      return output.substring(0, this.maxOutputSize) +
+        `\n... (output truncated at ${this.maxOutputSize} chars)`;
+    }
+
+    const headSize = Math.floor(this.maxOutputSize * 0.6);
+    const tailSize = Math.floor(this.maxOutputSize * 0.35);
+    const omitted = output.length - headSize - tailSize;
+
+    const head = output.substring(0, headSize);
+    const tail = output.substring(output.length - tailSize);
+    const notice = `\n... [${omitted.toLocaleString()} chars omitted] ...\n`;
+
+    return head + notice + tail;
+  }
+
   async executeToolCall(
     toolCall: { name: string; arguments: Record<string, unknown> }
   ): Promise<ToolExecuteResult> {
@@ -202,10 +220,9 @@ export class ToolRegistry {
 
     const result = await tool.execute(toolCall.arguments, this.context);
 
-    // Truncate output if too large
+    // Truncate output if too large (head+tail strategy)
     if (result.output && result.output.length > this.maxOutputSize) {
-      result.output = result.output.substring(0, this.maxOutputSize) +
-        `\n... (output truncated at ${this.maxOutputSize} chars)`;
+      result.output = this.truncateOutput(result.output);
     }
 
     return result;

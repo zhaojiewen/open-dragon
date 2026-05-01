@@ -14,6 +14,8 @@ import { perfMonitor } from '../performance/index.js';
 
 const logger = getLogger();
 
+const MAX_CACHE_BREAKPOINTS = 4;
+
 export class AnthropicProvider extends BaseProvider {
   readonly name = 'anthropic';
   protected apiKey: string;
@@ -49,7 +51,9 @@ export class AnthropicProvider extends BaseProvider {
     tools?: ToolDefinition[],
     options?: ChatOptions
   ): Promise<AIResponse> {
-    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt, options?.cacheControl);
+    const { systemPrompt, formattedMessages } = this.formatMessages(
+      messages, options?.systemPrompt, options?.cacheControl, tools
+    );
 
     const requestParams: Record<string, any> = {
       model: options?.model || this.defaultModel,
@@ -57,7 +61,7 @@ export class AnthropicProvider extends BaseProvider {
       max_tokens: options?.maxTokens || 16000,
     };
 
-    this.applySystemPrompt(requestParams, systemPrompt, options?.cacheControl);
+    this.applySystemPrompt(requestParams, systemPrompt);
     this.applyThinking(requestParams, options?.thinking);
     this.applyEffort(requestParams, options?.effort);
 
@@ -114,7 +118,9 @@ export class AnthropicProvider extends BaseProvider {
     tools?: ToolDefinition[],
     options?: ChatOptions
   ): AsyncGenerator<StreamChunk> {
-    const { systemPrompt, formattedMessages } = this.formatMessages(messages, options?.systemPrompt, options?.cacheControl);
+    const { systemPrompt, formattedMessages } = this.formatMessages(
+      messages, options?.systemPrompt, options?.cacheControl, tools
+    );
 
     const requestParams: Record<string, any> = {
       model: options?.model || this.defaultModel,
@@ -123,7 +129,7 @@ export class AnthropicProvider extends BaseProvider {
       stream: true,
     };
 
-    this.applySystemPrompt(requestParams, systemPrompt, options?.cacheControl);
+    this.applySystemPrompt(requestParams, systemPrompt);
     this.applyThinking(requestParams, options?.thinking);
     this.applyEffort(requestParams, options?.effort);
 
@@ -224,16 +230,10 @@ export class AnthropicProvider extends BaseProvider {
 
   private applySystemPrompt(
     params: Record<string, any>,
-    systemPrompt: string,
-    cacheControl?: boolean
+    systemPrompt: string | any[]
   ): void {
-    if (!systemPrompt) return;
-
-    if (cacheControl) {
-      params.system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
-    } else {
-      params.system = systemPrompt;
-    }
+    if (!systemPrompt || (Array.isArray(systemPrompt) && systemPrompt.length === 0)) return;
+    params.system = systemPrompt;
   }
 
   private applyThinking(
@@ -330,42 +330,135 @@ export class AnthropicProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Format messages for the Anthropic API.
+   *
+   * Cache breakpoint strategy (up to 4 breakpoints):
+   * 1. System prompt text block
+   * 2. Tool descriptions block (inlined into system array) — tools never change per session
+   * 3. 3rd-from-last user message — mid-history anchor point
+   * 4. Last user message — the immediate turn boundary
+   */
   private formatMessages(
     messages: Message[],
     systemPrompt?: string,
-    cacheControl?: boolean
-  ): { systemPrompt: string; formattedMessages: Anthropic.Messages.MessageParam[] } {
+    cacheControl?: boolean,
+    toolDefinitions?: ToolDefinition[]
+  ): { systemPrompt: string | any[]; formattedMessages: Anthropic.Messages.MessageParam[] } {
     const formatted: Anthropic.Messages.MessageParam[] = [];
     let system = systemPrompt || '';
 
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
+    // Extract system messages from the array
+    for (const msg of messages) {
       if (msg.role === 'system') {
         system = typeof msg.content === 'string' ? msg.content : system;
-      } else if (msg.role === 'user') {
-        const isLastUserMessage = cacheControl &&
-          i === messages.length - 1 &&
-          msg.role === 'user';
+      }
+    }
 
-        if (typeof msg.content === 'string') {
-          if (isLastUserMessage) {
+    // Build system prompt with cache_control breakpoints when enabled
+    if (cacheControl && system) {
+      const systemBlocks: any[] = [
+        { type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+      ];
+
+      // Add tool descriptions as a cacheable block
+      if (toolDefinitions && toolDefinitions.length > 0) {
+        const toolDesc = toolDefinitions.map(t =>
+          `- ${t.name}: ${t.description}`
+        ).join('\n');
+        systemBlocks.push({
+          type: 'text',
+          text: `Available tools:\n${toolDesc}`,
+          cache_control: { type: 'ephemeral' },
+        });
+      }
+
+      // We've used 1-2 breakpoints on system blocks.
+      // Remaining available: 2-3 for messages.
+      const systemBreakpointCount = systemBlocks.length;
+      const remainingBreakpoints = MAX_CACHE_BREAKPOINTS - systemBreakpointCount;
+
+      let messageBreakpointsPlaced = 0;
+
+      // Find user message indices to place cache breakpoints.
+      // We want: the last user message (always) + 3rd-from-last (if available).
+      const userMessageIndices: number[] = [];
+      for (let i = 0; i < messages.length; i++) {
+        if (messages[i].role === 'user') {
+          userMessageIndices.push(i);
+        }
+      }
+
+      // Track which original message indices get cache breaks
+      const cacheBreakIndices = new Set<number>();
+
+      // Always cache the last user message
+      if (userMessageIndices.length > 0) {
+        cacheBreakIndices.add(userMessageIndices[userMessageIndices.length - 1]);
+      }
+
+      // Cache 3rd-from-last user message if we have room and enough messages
+      if (remainingBreakpoints >= 2 && userMessageIndices.length >= 3) {
+        cacheBreakIndices.add(userMessageIndices[userMessageIndices.length - 3]);
+      }
+
+      // Process messages, adding cache_control to designated user messages
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        const shouldCacheUserMsg = msg.role === 'user' && cacheBreakIndices.has(i);
+
+        if (msg.role === 'user') {
+          if (typeof msg.content === 'string') {
+            if (shouldCacheUserMsg) {
+              formatted.push({
+                role: 'user',
+                content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
+              });
+            } else {
+              formatted.push({ role: 'user', content: msg.content });
+            }
+          } else {
             formatted.push({
               role: 'user',
-              content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
+              content: this.formatContentBlocks(msg.content, shouldCacheUserMsg),
             });
-          } else {
-            formatted.push({ role: 'user', content: msg.content });
           }
-        } else {
+        } else if (msg.role === 'assistant') {
+          formatted.push({
+            role: 'assistant',
+            content: typeof msg.content === 'string'
+              ? msg.content
+              : this.formatContentBlocks(msg.content),
+          });
+        } else if (msg.role === 'tool') {
           formatted.push({
             role: 'user',
-            content: this.formatContentBlocks(msg.content, isLastUserMessage),
+            content: typeof msg.content === 'string'
+              ? [{ type: 'tool_result', tool_use_id: msg.toolCallId || '', content: msg.content }]
+              : this.formatContentBlocks(msg.content),
           });
+        }
+      }
+
+      return { systemPrompt: systemBlocks, formattedMessages: formatted };
+    }
+
+    // Non-cache path (original behavior)
+    for (const msg of messages) {
+      if (msg.role === 'system') continue; // Already extracted
+
+      if (msg.role === 'user') {
+        if (typeof msg.content === 'string') {
+          formatted.push({ role: 'user', content: msg.content });
+        } else {
+          formatted.push({ role: 'user', content: this.formatContentBlocks(msg.content) });
         }
       } else if (msg.role === 'assistant') {
         formatted.push({
           role: 'assistant',
-          content: typeof msg.content === 'string' ? msg.content : this.formatContentBlocks(msg.content),
+          content: typeof msg.content === 'string'
+            ? msg.content
+            : this.formatContentBlocks(msg.content),
         });
       } else if (msg.role === 'tool') {
         formatted.push({

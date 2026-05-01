@@ -42,6 +42,7 @@ export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 
 export const DragonConfigSchema = z.object({
   defaultProvider: z.string().default('anthropic'),
+  defaultTokenSaveLevel: z.enum(['off', 'mild', 'moderate', 'aggressive']).default('off'),
   providers: z.record(z.string(), ProviderConfigSchema).default({}),
   tools: ToolsConfigSchema.optional(),
   logging: LogConfigSchema.optional(),
@@ -73,6 +74,7 @@ export type DragonConfig = z.infer<typeof DragonConfigSchema>;
 
 export const DEFAULT_CONFIG: DragonConfig = {
   defaultProvider: 'anthropic',
+  defaultTokenSaveLevel: 'off',
   providers: {
     openai: {
       models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],

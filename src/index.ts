@@ -23,7 +23,8 @@ program
   .name('dragon')
   .description('Multi-provider AI CLI tool powered by Claude API - your intelligent coding companion')
   .version(VERSION)
-  .option('--monitor', 'Enable performance monitoring');
+  .option('--monitor', 'Enable performance monitoring')
+  .option('--token-save <level>', 'Token saving level: off, mild, moderate, aggressive');
 
 async function promptPassword(): Promise<string> {
   if (!stdinStream.isTTY) {
@@ -138,13 +139,15 @@ program
   .description('Start interactive chat session')
   .option('-p, --provider <provider>', 'AI provider to use')
   .option('-m, --model <model>', 'Model to use')
+  .option('-t, --token-save <level>', 'Token saving level: off, mild, moderate, aggressive')
   .action(async (options) => {
     try {
       const useEncryption = !!process.env.DRAGON_PASSWORD;
       const config = await loadConfig(useEncryption);
       const provider = options.provider || config.defaultProvider;
       const globalOptions = program.opts();
-      await startRepl({ provider, model: options.model, enableMonitoring: globalOptions.monitor });
+      const tokenSaveLevel = options.tokenSave || globalOptions.tokenSave;
+      await startRepl({ provider, model: options.model, enableMonitoring: globalOptions.monitor, tokenSaveLevel });
     } catch (error: any) {
       const msg = error.message || error;
       console.error(chalk.red('Failed to start chat:'), msg);
@@ -169,7 +172,8 @@ program
       const useEncryption = !!process.env.DRAGON_PASSWORD;
       const config = await loadConfig(useEncryption);
       const opts = program.opts();
-      await startRepl({ provider: config.defaultProvider, enableMonitoring: opts.monitor });
+      const tokenSaveLevel = opts.tokenSave || config.defaultTokenSaveLevel;
+      await startRepl({ provider: config.defaultProvider, enableMonitoring: opts.monitor, tokenSaveLevel });
     } catch (error: any) {
       if (error.code === 'ENOENT' || error.message?.includes('not found')) {
         console.log(chalk.yellow('No configuration found.'));

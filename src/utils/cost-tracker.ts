@@ -28,15 +28,30 @@ export interface UsageRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cacheCostSavings: number;
   cost: number;
   timestamp: Date;
+}
+
+export interface CacheStats {
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cacheCostSavings: number;
 }
 
 export class CostTracker {
   private records: UsageRecord[] = [];
   private enabled: boolean = true;
 
-  record(model: string, inputTokens: number, outputTokens: number): void {
+  record(
+    model: string,
+    inputTokens: number,
+    outputTokens: number,
+    cacheCreationTokens?: number,
+    cacheReadTokens?: number
+  ): void {
     if (!this.enabled) return;
 
     const pricing = MODEL_PRICING[model];
@@ -44,17 +59,29 @@ export class CostTracker {
       ? (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output
       : 0;
 
+    let cacheCostSavings = 0;
+    if (pricing && cacheReadTokens && cacheReadTokens > 0) {
+      cacheCostSavings = (cacheReadTokens / 1_000_000) * pricing.input * 0.9;
+    }
+
     this.records.push({
       model,
       inputTokens,
       outputTokens,
+      cacheCreationTokens: cacheCreationTokens || 0,
+      cacheReadTokens: cacheReadTokens || 0,
       cost,
+      cacheCostSavings,
       timestamp: new Date(),
     });
   }
 
   getSessionCost(): number {
     return this.records.reduce((sum, r) => sum + r.cost, 0);
+  }
+
+  getEffectiveCost(): number {
+    return this.getSessionCost() - this.getCacheStats().cacheCostSavings;
   }
 
   getSessionTokens(): { input: number; output: number } {
@@ -69,13 +96,22 @@ export class CostTracker {
     return t.input + t.output;
   }
 
+  getCacheStats(): CacheStats {
+    return {
+      cacheCreationTokens: this.records.reduce((s, r) => s + r.cacheCreationTokens, 0),
+      cacheReadTokens: this.records.reduce((s, r) => s + r.cacheReadTokens, 0),
+      cacheCostSavings: this.records.reduce((s, r) => s + r.cacheCostSavings, 0),
+    };
+  }
+
   getRecords(): UsageRecord[] {
     return [...this.records];
   }
 
-  getSummary(): string {
+  getSummary(includeCacheDetails: boolean = false): string {
     const tokens = this.getSessionTokens();
     const cost = this.getSessionCost();
+    const cache = this.getCacheStats();
     const lines: string[] = [
       `Total input tokens:  ${tokens.input.toLocaleString()}`,
       `Total output tokens: ${tokens.output.toLocaleString()}`,
@@ -83,6 +119,17 @@ export class CostTracker {
       `Estimated cost:      $${cost.toFixed(4)}`,
       `API calls:           ${this.records.length}`,
     ];
+
+    if (includeCacheDetails && (cache.cacheReadTokens > 0 || cache.cacheCreationTokens > 0)) {
+      const hitRate = tokens.input > 0
+        ? ((cache.cacheReadTokens / tokens.input) * 100).toFixed(1)
+        : '0.0';
+      lines.push('');
+      lines.push(`Cache writes:       ${cache.cacheCreationTokens.toLocaleString()} tokens`);
+      lines.push(`Cache reads:        ${cache.cacheReadTokens.toLocaleString()} tokens (${hitRate}% hit rate)`);
+      lines.push(`Cache savings:      $${cache.cacheCostSavings.toFixed(4)}`);
+      lines.push(`Effective cost:     $${(cost - cache.cacheCostSavings).toFixed(4)}`);
+    }
 
     if (this.records.length > 0) {
       const byModel = new Map<string, { input: number; output: number; cost: number }>();

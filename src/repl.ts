@@ -12,15 +12,59 @@ import type { Message, AIResponse, ToolCall } from './providers/base.js';
 import { DragonError, ConfigError, wrapError } from './utils/errors.js';
 import { getLogger } from './utils/logger.js';
 import { costTracker } from './utils/cost-tracker.js';
+import { HistoryCompactor } from './utils/history-compactor.js';
 import { perfMonitor } from './performance/index.js';
 
 const logger = getLogger();
+
+type TokenSaveLevel = 'off' | 'mild' | 'moderate' | 'aggressive';
+
+// Module-level system prompt loaded from project files
+let resolvedSystemPrompt = '';
+
+function loadSystemPrompt(cwd: string): string {
+  const parts: string[] = [];
+
+  // Load CLAUDE.md from current working directory
+  const claudeMdPath = path.join(cwd, 'CLAUDE.md');
+  if (fs.existsSync(claudeMdPath)) {
+    try {
+      const content = fs.readFileSync(claudeMdPath, 'utf-8');
+      if (content.length > 50000) {
+        parts.push(content.substring(0, 50000) + '\n\n... (CLAUDE.md truncated at 50K characters)');
+        logger.warn(`CLAUDE.md exceeds 50K chars (${content.length}), truncated`);
+      } else {
+        parts.push(content);
+      }
+      logger.debug(`Loaded CLAUDE.md (${Math.min(content.length, 50000)} chars)`);
+    } catch (err: any) {
+      logger.warn(`Failed to read CLAUDE.md: ${err.message}`);
+    }
+  }
+
+  // Load additional prompt from .claude/settings.local.json
+  const settingsLocalPath = path.join(cwd, '.claude', 'settings.local.json');
+  if (fs.existsSync(settingsLocalPath)) {
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsLocalPath, 'utf-8'));
+      if (settings.systemPrompt && typeof settings.systemPrompt === 'string') {
+        parts.push(settings.systemPrompt);
+        logger.debug(`Loaded system prompt from .claude/settings.local.json`);
+      }
+    } catch {
+      // Ignore malformed settings
+    }
+  }
+
+  return parts.join('\n\n');
+}
 
 interface ReplOptions {
   provider?: string;
   model?: string;
   enableMonitoring?: boolean;
   enableEncryption?: boolean;
+  tokenSaveLevel?: TokenSaveLevel;
 }
 
 export async function startRepl(options: ReplOptions = {}): Promise<void> {
@@ -34,8 +78,8 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
     model: options.model,
     autoApproveTools: false,
     autoApproveOutsideWorkspace: false,
-    tokenSaveLevel: 'off',
-    tokenSavePrompted: false,
+    tokenSaveLevel: (options.tokenSaveLevel as TokenSaveLevel) || 'off',
+    tokenSavePrompted: !!options.tokenSaveLevel,
   };
 
   // Enable performance monitoring if requested
@@ -58,6 +102,12 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
     sessionState.provider = provider;
     sessionState.providerName = providerName;
     sessionState.model = options.model || provider.getDefaultModel();
+
+    // Override tokenSaveLevel from persisted config if not explicitly set via CLI
+    if (!options.tokenSaveLevel && config.defaultTokenSaveLevel && config.defaultTokenSaveLevel !== 'off') {
+      sessionState.tokenSaveLevel = config.defaultTokenSaveLevel as TokenSaveLevel;
+      sessionState.tokenSavePrompted = true;
+    }
     toolRegistry = createToolRegistry(process.cwd());
     toolRegistry.setProvider(provider);
     toolRegistry.setPermissions(
@@ -93,6 +143,9 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
       sessionState.autoApproveTools = true;
     }
 
+    // Load system prompt from project files
+    resolvedSystemPrompt = loadSystemPrompt(process.cwd());
+
     const toolCount = toolRegistry.getToolDefinitions(config.tools?.enabled).length;
     const sandboxStatus = config.tools?.bash?.dangerouslyDisableSandbox
       ? chalk.yellow('disabled (unsafe)')
@@ -109,7 +162,7 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
 
     console.log(chalk.dim(`  Provider: ${providerName}  ·  Model: ${sessionState.model}`));
     console.log(chalk.dim(`  Tools: ${toolCount}  ·  Sandbox: ${sandboxStatus}  ·  Cache: ${cacheStatus}  ·  Permissions: ${permStatus}  ·  Workspace: ${workspaceStatus}`));
-    console.log(chalk.dim('  /auto · /workspace · /save-tokens · /help'));
+    console.log(chalk.dim('  /auto · /workspace · /save-tokens · /cache · /help'));
 
     // First-run tip: explain workspace auto-execute behavior
     if (config.workspace?.enforceBounds && config.workspace.paths.length > 0) {
@@ -212,7 +265,7 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
 
       try {
         const tools = toolRegistry.getToolDefinitions(config.tools?.enabled);
-        const response = await handleChat(messages, tools, sessionState.provider, toolRegistry, sessionState.model);
+        const response = await handleChat(messages, tools, sessionState.provider, toolRegistry, sessionState.model, sessionState.autoApproveTools, sessionState.tokenSaveLevel, sessionState, sessionState.autoApproveOutsideWorkspace, config.workspace?.paths || []);
         messages = response.messages;
         console.log();
         rl.prompt();
@@ -266,12 +319,31 @@ async function handleChat(
     model: effectiveModel,
     cacheControl: saveConfig.cacheControl,
     maxTokens: saveConfig.maxTokens,
+    systemPrompt: resolvedSystemPrompt || undefined,
   };
   if (saveConfig.thinking) {
     streamOptions.thinking = saveConfig.thinking;
   }
   if (saveConfig.effort) {
     streamOptions.effort = saveConfig.effort;
+  }
+
+  // Apply token-saving tool output truncation
+  if (saveConfig.maxToolOutputSize) {
+    toolRegistry.setExecutionLimits({ maxOutputSize: saveConfig.maxToolOutputSize });
+  }
+
+  // History compaction: auto-compact before hitting context window limit
+  if (saveConfig.enableCompaction !== false) {
+    const compactor = new HistoryCompactor();
+    if (compactor.needsCompaction(currentMessages)) {
+      process.stdout.write(chalk.dim('\n  Compacting conversation history...\n'));
+      const result = await compactor.compact(currentMessages, provider, model);
+      if (result.wasCompacted) {
+        currentMessages = result.messages;
+        process.stdout.write(chalk.dim(`  Reduced from ${result.originalCount} to ${result.compactedCount} messages\n`));
+      }
+    }
   }
 
   while (true) {
@@ -343,7 +415,9 @@ async function handleChat(
       costTracker.record(
         model || provider.getDefaultModel(),
         lastUsage.inputTokens,
-        lastUsage.outputTokens
+        lastUsage.outputTokens,
+        lastUsage.cacheCreationTokens,
+        lastUsage.cacheReadTokens
       );
     }
 
@@ -551,8 +625,6 @@ async function handleChat(
 // Show warning when session exceeds this many tokens
 const TOKEN_SAVE_THRESHOLD = 1_000_000;
 
-type TokenSaveLevel = 'off' | 'mild' | 'moderate' | 'aggressive';
-
 interface TokenSaveConfig {
   label: string;
   thinking: any | undefined;
@@ -561,6 +633,8 @@ interface TokenSaveConfig {
   cacheControl: boolean;
   modelSuffix?: string;
   limitTools: boolean;
+  enableCompaction: boolean;
+  maxToolOutputSize?: number;
 }
 
 const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
@@ -571,6 +645,7 @@ const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
     maxTokens: 64000,
     cacheControl: true,
     limitTools: false,
+    enableCompaction: true,
   },
   mild: {
     label: 'Mild — thinking on, effort=medium, 32K max',
@@ -579,6 +654,7 @@ const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
     maxTokens: 32000,
     cacheControl: true,
     limitTools: false,
+    enableCompaction: true,
   },
   moderate: {
     label: 'Moderate — no thinking, effort=low, 16K max, no cache writes',
@@ -587,6 +663,8 @@ const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
     maxTokens: 16000,
     cacheControl: false,
     limitTools: false,
+    enableCompaction: false,
+    maxToolOutputSize: 50000,
   },
   aggressive: {
     label: 'Aggressive — Haiku model, no thinking, 8K max, limited tools',
@@ -596,6 +674,8 @@ const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
     cacheControl: false,
     modelSuffix: 'claude-haiku-4-5',
     limitTools: true,
+    enableCompaction: false,
+    maxToolOutputSize: 10000,
   },
 };
 
@@ -885,6 +965,7 @@ async function handleCommand(
       console.log('  /save-tokens Toggle token-saving eco mode (/eco)');
       console.log(chalk.dim('  ── Diagnostics ──'));
       console.log('  /cost        Show token usage & cost estimate');
+      console.log('  /cache       Show cache statistics & hit rate');
       console.log('  /perf        Show performance report (--monitor flag required)');
       console.log('  /debug       Toggle debug mode (on/off)');
       console.log(chalk.dim('  ── Other ──'));
@@ -1039,7 +1120,7 @@ async function handleCommand(
       return true;
 
     case 'cost':
-      const summary = costTracker.getSummary();
+      const summary = costTracker.getSummary(true);
       if (costTracker.getSessionCost() === 0 && costTracker.getRecords().length === 0) {
         console.log(chalk.dim('No cost data recorded yet. Costs are estimated from provider-reported token usage.'));
       } else {
@@ -1048,6 +1129,46 @@ async function handleCommand(
         console.log(chalk.dim('\nNote: Costs are estimates based on published pricing.'));
       }
       return true;
+
+    case 'cache': {
+      const cache = costTracker.getCacheStats();
+      const totalTokens = costTracker.getTotalTokens();
+
+      console.log(chalk.yellow('\n  Cache Statistics:'));
+
+      if (cache.cacheReadTokens === 0 && cache.cacheCreationTokens === 0) {
+        console.log(chalk.dim('  No cache data recorded yet.'));
+        console.log(chalk.dim('  Cache is enabled when token-saving level is off or mild.'));
+      } else {
+        console.log(`  Cache writes:  ${chalk.dim(cache.cacheCreationTokens.toLocaleString())} tokens`);
+        console.log(`  Cache reads:   ${chalk.green(cache.cacheReadTokens.toLocaleString())} tokens`);
+
+        const hitRate = totalTokens > 0
+          ? ((cache.cacheReadTokens / costTracker.getSessionTokens().input) * 100).toFixed(1)
+          : '0.0';
+        console.log(`  Cache hit rate: ${chalk.cyan(hitRate + '%')} of input tokens`);
+
+        const totalCost = costTracker.getSessionCost();
+        const effectiveCost = costTracker.getEffectiveCost();
+        console.log(`  Cache savings:  ${chalk.green('$' + cache.cacheCostSavings.toFixed(4))}`);
+        console.log(`  Effective cost: $${effectiveCost.toFixed(4)} (was $${totalCost.toFixed(4)})`);
+
+        if (cache.cacheCostSavings > 0) {
+          const savingsPct = (cache.cacheCostSavings / totalCost * 100).toFixed(1);
+          console.log(`  Savings:       ${chalk.green(savingsPct + '%')}`);
+        }
+      }
+
+      const level = session.tokenSaveLevel;
+      const levelColors: Record<string, (s: string) => string> = {
+        off: chalk.green, mild: chalk.blue, moderate: chalk.yellow, aggressive: chalk.red,
+      };
+      const color = levelColors[level] || chalk.dim;
+      console.log(`\n  Token-saving:     ${color(level)}`);
+      console.log(chalk.dim('  Use /save-tokens to change level'));
+      console.log();
+      return true;
+    }
 
     case 'save':
       const savePath = args[0] || `dragon-session-${Date.now()}.json`;
@@ -1143,6 +1264,14 @@ async function handleCommand(
 
       if (targetLevel && ['off', 'mild', 'moderate', 'aggressive'].includes(targetLevel)) {
         session.tokenSaveLevel = targetLevel;
+        // Persist preference to config
+        config.defaultTokenSaveLevel = targetLevel;
+        try {
+          const { saveConfig } = await import('./config/index.js');
+          saveConfig(config);
+        } catch {
+          // Non-critical: preference persists for session only
+        }
         const cfg = TOKEN_SAVE_CONFIGS[targetLevel];
         if (targetLevel === 'off') {
           console.log(chalk.dim('  Token-saving OFF — full quality restored.'));
