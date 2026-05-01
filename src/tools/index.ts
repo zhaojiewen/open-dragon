@@ -94,6 +94,11 @@ export class ToolRegistry {
         ...(process.env.HOME ? [process.env.HOME] : []),
       ];
       this.context.allowedPaths = paths; // backward compat
+    } else {
+      // Clear scope: empty array means no workspace enforcement
+      this.context.writeScope = undefined;
+      this.context.readScope = undefined;
+      this.context.allowedPaths = undefined;
     }
   }
 

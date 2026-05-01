@@ -48,7 +48,7 @@ describe('ReadTool', () => {
     const result = await readTool.execute({ file_path: '/etc/passwd' });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('blocked');
+    expect(result.error).toContain('access blocked');
   });
 
   it('should fail if path is a directory', async () => {

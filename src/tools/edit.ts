@@ -36,7 +36,7 @@ export class EditTool extends BaseTool {
         return {
           success: false,
           output: pathError.message,
-          error: 'Path traversal blocked',
+          error: pathError.message,
         };
       }
 

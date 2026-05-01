@@ -618,7 +618,7 @@ async function handleChat(
             toolSpinner.fail(chalk.red(`${tc.name}: ${errMsg}`));
 
             // Friendly workspace boundary prompt
-            if (errMsg.toLowerCase().includes('workspace') || errMsg.toLowerCase().includes('scope')) {
+            if (errMsg.toLowerCase().includes('workspace') || errMsg.toLowerCase().includes('scope') || errMsg.toLowerCase().includes('blocked') || errMsg.toLowerCase().includes('outside')) {
               console.log(chalk.yellow(`\n  ⚠ Tool tried to access a path outside your workspace.`));
               console.log(chalk.cyan('  /workspace add <path>') + chalk.dim(' to allow this directory'));
               console.log(chalk.cyan('  /workspace off') + chalk.dim(' to disable workspace enforcement'));
