@@ -103,11 +103,6 @@ export const DEFAULT_CONFIG: DragonConfig = {
     bash: {
       dangerouslyDisableSandbox: false,
     },
-    executionLimits: {
-      maxToolCallsPerTurn: 25,
-      maxTotalToolCalls: 200,
-      maxOutputSize: 100000,
-    },
   },
   logging: {
     level: 'info',

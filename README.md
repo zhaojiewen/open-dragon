@@ -91,12 +91,7 @@ Config file: `~/.dragon/config.json`
     }
   },
   "tools": {
-    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "agent"],
-    "executionLimits": {
-      "maxToolCallsPerTurn": 25,
-      "maxTotalToolCalls": 200,
-      "maxOutputSize": 100000
-    }
+    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "webfetch", "websearch", "agent"]
   },
   "workspace": {
     "paths": [],

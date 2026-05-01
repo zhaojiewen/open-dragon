@@ -143,6 +143,34 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
       sessionState.autoApproveTools = true;
     }
 
+    // Prompt to add current directory as workspace on first run
+    const cwd = process.cwd();
+    const cwdInWorkspace = config.workspace?.paths?.some(
+      (p) => path.resolve(p) === cwd
+    );
+    if (!cwdInWorkspace) {
+      const useAsWorkspace = await promptWorkspaceInit(cwd);
+      if (useAsWorkspace) {
+        if (!config.workspace) {
+          config.workspace = { paths: [], writeEnabled: true, enforceBounds: true, allowHomeDir: true };
+        }
+        config.workspace.paths = [...(config.workspace.paths || []), cwd];
+        config.workspace.enforceBounds = true;
+        toolRegistry.setWorkspaceScope(
+          config.workspace.paths,
+          config.workspace.allowHomeDir
+            ? [...config.workspace.paths, process.env.HOME || ''].filter(Boolean)
+            : config.workspace.paths
+        );
+        sessionState.autoApproveTools = true;
+        // Persist to disk
+        try {
+          const { saveConfig } = await import('./config/index.js');
+          saveConfig(config);
+        } catch {}
+      }
+    }
+
     // Load system prompt from project files
     resolvedSystemPrompt = loadSystemPrompt(process.cwd());
 
@@ -751,6 +779,39 @@ function isToolInWorkspace(tc: ToolCall, workspacePaths: string[]): boolean {
     if (!isAllowed) return false;
   }
   return true;
+}
+
+/**
+ * Prompt at startup whether to use the current directory as workspace.
+ */
+function promptWorkspaceInit(cwd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    process.stdout.write(
+      chalk.cyan(`\n  Use current directory as workspace?\n`) +
+      chalk.dim(`  ${cwd}\n`) +
+      chalk.dim('  ') +
+      chalk.green('[y]') + chalk.dim(' yes  ') +
+      chalk.red('[n]') + chalk.dim(' no\n') +
+      chalk.dim('  Choice: ')
+    );
+
+    const wasRaw = process.stdin.isRaw;
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+
+    const onData = (data: Buffer) => {
+      const key = data.toString().toLowerCase().trim();
+      if (['y', 'n'].includes(key)) {
+        process.stdin.setRawMode(wasRaw || false);
+        process.stdin.pause();
+        process.stdin.removeListener('data', onData);
+        process.stdout.write(key + '\n');
+        resolve(key === 'y');
+      }
+    };
+
+    process.stdin.on('data', onData);
+  });
 }
 
 /**
