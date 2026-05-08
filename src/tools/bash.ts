@@ -40,6 +40,12 @@ export class BashTool extends BaseTool {
     if (!allowDangerous) {
       const blockReason = this.checkCommand(command);
       if (blockReason) {
+        const logger = (await import('../utils/logger.js')).getLogger();
+        logger.security('bash_sandbox_blocked', {
+          command,
+          reason: blockReason,
+          cwd: context?.workingDirectory || process.cwd(),
+        });
         return {
           success: false,
           output: blockReason,
@@ -51,6 +57,12 @@ export class BashTool extends BaseTool {
     // Check workspace boundaries for file paths in the command
     const workspaceCheck = this.checkWorkspacePaths(command, context);
     if (workspaceCheck) {
+      const logger = (await import('../utils/logger.js')).getLogger();
+      logger.security('bash_workspace_blocked', {
+        command,
+        reason: workspaceCheck,
+        cwd: context?.workingDirectory || process.cwd(),
+      });
       return {
         success: false,
         output: workspaceCheck,

@@ -116,15 +116,6 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
         : []
     );
 
-    // Wire up execution limits from config
-    if (config.tools?.executionLimits) {
-      toolRegistry.setExecutionLimits({
-        maxToolCallsPerTurn: config.tools.executionLimits.maxToolCallsPerTurn,
-        maxTotalToolCalls: config.tools.executionLimits.maxTotalToolCalls,
-        maxOutputSize: config.tools.executionLimits.maxOutputSize,
-      });
-    }
-
     // Wire up workspace scope
     if (config.workspace?.enforceBounds && config.workspace.paths.length > 0) {
       toolRegistry.setWorkspaceScope(

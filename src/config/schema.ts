@@ -11,16 +11,9 @@ export const BashToolConfigSchema = z.object({
   dangerouslyDisableSandbox: z.boolean().default(false),
 });
 
-export const ExecutionLimitsSchema = z.object({
-  maxToolCallsPerTurn: z.number().default(25),
-  maxTotalToolCalls: z.number().default(200),
-  maxOutputSize: z.number().default(100000), // 100KB
-});
-
 export const ToolsConfigSchema = z.object({
   enabled: z.array(z.string()).default(['bash', 'read', 'write', 'edit']),
   bash: BashToolConfigSchema.optional(),
-  executionLimits: ExecutionLimitsSchema.optional(),
 });
 
 export const LogConfigSchema = z.object({
