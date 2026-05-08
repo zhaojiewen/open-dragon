@@ -4,7 +4,7 @@
   "description": "Multi-provider AI CLI tool powered by Claude API",
   "main": "dist/index.js",
   "bin": {
-    "dragon": "./dist/index.js"
+    "dragon": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
