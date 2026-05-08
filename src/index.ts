@@ -4,7 +4,7 @@ import { spawnSync } from 'child_process';
 import { stdin as stdinStream, stdout as stdoutStream } from 'process';
 import { program } from 'commander';
 import { startRepl } from './repl.js';
-import { loadConfig, initConfig } from './config/index.js';
+import { initConfig } from './config/index.js';
 import { encryptionService } from './encryption/index.js';
 import { getLogger, LogLevel } from './utils/logger.js';
 import chalk from 'chalk';
@@ -142,12 +142,15 @@ program
   .option('-t, --token-save <level>', 'Token saving level: off, mild, moderate, aggressive')
   .action(async (options) => {
     try {
-      const useEncryption = !!process.env.DRAGON_PASSWORD;
-      const config = await loadConfig(useEncryption);
-      const provider = options.provider || config.defaultProvider;
       const globalOptions = program.opts();
       const tokenSaveLevel = options.tokenSave || globalOptions.tokenSave;
-      await startRepl({ provider, model: options.model, enableMonitoring: globalOptions.monitor, tokenSaveLevel });
+      await startRepl({
+        provider: options.provider,
+        model: options.model,
+        enableMonitoring: globalOptions.monitor,
+        enableEncryption: !!process.env.DRAGON_PASSWORD,
+        tokenSaveLevel,
+      });
     } catch (error: any) {
       const msg = error.message || error;
       console.error(chalk.red('Failed to start chat:'), msg);
@@ -168,12 +171,12 @@ program
     console.log();
 
     try {
-      // Check if encrypted config needs password via DRAGON_PASSWORD env var
-      const useEncryption = !!process.env.DRAGON_PASSWORD;
-      const config = await loadConfig(useEncryption);
       const opts = program.opts();
-      const tokenSaveLevel = opts.tokenSave || config.defaultTokenSaveLevel;
-      await startRepl({ provider: config.defaultProvider, enableMonitoring: opts.monitor, tokenSaveLevel });
+      await startRepl({
+        enableMonitoring: opts.monitor,
+        enableEncryption: !!process.env.DRAGON_PASSWORD,
+        tokenSaveLevel: opts.tokenSave,
+      });
     } catch (error: any) {
       if (error.code === 'ENOENT' || error.message?.includes('not found')) {
         console.log(chalk.yellow('No configuration found.'));

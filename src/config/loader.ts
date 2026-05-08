@@ -42,7 +42,7 @@ export async function loadConfig(useEncryption: boolean = false): Promise<Dragon
       },
     });
 
-    logger.info('Configuration loaded successfully');
+    logger.debug('Configuration loaded successfully');
 
     // Initialize security logging if configured
     if (config.logging?.logFile) {

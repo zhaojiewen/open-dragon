@@ -57,7 +57,7 @@ export abstract class BaseTool {
    * Resolve a file path and validate it stays within allowed directories.
    * Returns absolute path if valid, throws if path traversal is detected.
    *
-   * Default allowed roots: working directory, home dir, temp dir, .dragon config.
+   * Default allowed roots: working directory, home dir, temp dir.
    * If allowedPaths is explicitly provided, only those paths are allowed.
    */
   protected resolvePath(
@@ -89,6 +89,14 @@ export abstract class BaseTool {
           `Access to system path "${realPath}" is blocked for security.`
         );
       }
+    }
+
+    // Block .dragon config directory (contains API keys and credentials)
+    const dragonConfigDir = path.join(os.homedir(), '.dragon');
+    if (realPath === dragonConfigDir || realPath.startsWith(dragonConfigDir + path.sep)) {
+      throw new Error(
+        `Access to Dragon config directory is blocked for security.`
+      );
     }
 
     // Determine allowed roots based on scope
