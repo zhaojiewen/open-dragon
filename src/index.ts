@@ -10,7 +10,7 @@ import { getLogger, LogLevel } from './utils/logger.js';
 import chalk from 'chalk';
 import figlet from 'figlet';
 
-const VERSION = '1.3.3';
+const VERSION = '1.3.4';
 const logger = getLogger();
 
 // Handle environment variables
