@@ -11,6 +11,10 @@ import { WebSearchTool } from './websearch.js';
 import { AgentTool } from './agent.js';
 import type { ToolDefinition } from '../providers/base.js';
 import type { AIProvider } from '../providers/index.js';
+import { SkillTool } from '../skills/skill-tool.js';
+import type { SkillDefinition } from '../skills/types.js';
+import { McpClientManager } from './mcp-client.js';
+import type { McpServerConfig } from '../config/schema.js';
 
 export * from './base.js';
 
@@ -21,9 +25,12 @@ export class ToolRegistry {
   private totalToolCalls: number = 0;
   private maxOutputSize: number = 100000;
   private toolCallCountThisTurn: number = 0;
+  private skillTool: SkillTool;
+  private mcpManager: McpClientManager | null = null;
 
   constructor(workingDirectory: string = process.cwd()) {
     this.context = { workingDirectory };
+    this.skillTool = new SkillTool();
     this.registerDefaultTools();
   }
 
@@ -37,6 +44,7 @@ export class ToolRegistry {
     this.register(new WebFetchTool());
     this.register(new WebSearchTool());
     this.register(new AgentTool());
+    this.register(this.skillTool);
   }
 
   register(tool: BaseTool) {
@@ -81,6 +89,35 @@ export class ToolRegistry {
 
   setExecutionLimits(limits?: { maxOutputSize?: number }) {
     if (limits?.maxOutputSize) this.maxOutputSize = limits.maxOutputSize;
+  }
+
+  /**
+   * Update the skills list in the SkillTool (called when skills are loaded/reloaded).
+   */
+  setSkills(skills: SkillDefinition[]) {
+    this.skillTool.setSkills(skills);
+  }
+
+  /**
+   * Initialize MCP servers — connects to configured servers, discovers tools,
+   * and registers them as McpServerTool wrappers.
+   */
+  async initializeMcpServers(mcpServers: Record<string, McpServerConfig>): Promise<void> {
+    this.mcpManager = new McpClientManager();
+    await this.mcpManager.connect(mcpServers);
+    for (const tool of this.mcpManager.getTools()) {
+      this.register(tool);
+    }
+  }
+
+  /**
+   * Disconnect all MCP server connections. Call before shutdown.
+   */
+  async disconnectMcp(): Promise<void> {
+    if (this.mcpManager) {
+      await this.mcpManager.disconnect();
+      this.mcpManager = null;
+    }
   }
 
   resetTurnCounter() {
@@ -152,7 +189,16 @@ export class ToolRegistry {
       workingDirectory: this.context.workingDirectory,
     });
 
-    const result = await tool.execute(toolCall.arguments, this.context);
+    let result: ToolExecuteResult;
+    try {
+      result = await tool.execute(toolCall.arguments, this.context);
+    } catch (error: any) {
+      result = {
+        success: false,
+        output: error.message || `Tool execution failed: ${toolCall.name}`,
+        error: error.message || 'Tool execution failed',
+      };
+    }
 
     if (result.output && result.output.length > this.maxOutputSize) {
       result.output = this.truncateOutput(result.output);
@@ -177,3 +223,5 @@ export {
   WebSearchTool,
   AgentTool,
 };
+
+export { McpServerTool } from './mcp-tool.js';

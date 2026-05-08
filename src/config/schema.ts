@@ -33,6 +33,18 @@ export const WorkspaceConfigSchema = z.object({
 
 export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
 
+export const McpServerConfigSchema = z.object({
+  transport: z.enum(['stdio', 'sse', 'streamableHttp']).default('stdio'),
+  command: z.string().optional(),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({}),
+  url: z.string().optional(),
+  toolPrefix: z.string().optional(),
+  disabled: z.boolean().default(false),
+});
+
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
 export const DragonConfigSchema = z.object({
   defaultProvider: z.string().default('anthropic'),
   defaultTokenSaveLevel: z.enum(['off', 'mild', 'moderate', 'aggressive']).default('off'),
@@ -40,6 +52,7 @@ export const DragonConfigSchema = z.object({
   tools: ToolsConfigSchema.optional(),
   logging: LogConfigSchema.optional(),
   workspace: WorkspaceConfigSchema.optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).default({}),
 }).refine((config) => {
   // Validate that defaultProvider exists in providers
   if (Object.keys(config.providers).length > 0 && !config.providers[config.defaultProvider]) {
@@ -92,7 +105,7 @@ export const DEFAULT_CONFIG: DragonConfig = {
     },
   },
   tools: {
-    enabled: ['bash', 'read', 'write', 'edit', 'agent', 'websearch', 'webfetch', 'glob', 'grep'],
+    enabled: ['bash', 'read', 'write', 'edit', 'agent', 'websearch', 'webfetch', 'glob', 'grep', 'skill'],
     bash: {
       dangerouslyDisableSandbox: false,
     },
@@ -107,4 +120,5 @@ export const DEFAULT_CONFIG: DragonConfig = {
     enforceBounds: false,
     allowHomeDir: true,
   },
+  mcpServers: {},
 };

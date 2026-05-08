@@ -149,8 +149,10 @@ export function validateConfig(config: DragonConfig): { valid: boolean; errors: 
 
   // Check tool configurations
   if (config.tools?.enabled) {
-    const availableTools = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'webfetch', 'websearch', 'agent'];
+    const availableTools = ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'webfetch', 'websearch', 'agent', 'skill'];
     for (const tool of config.tools.enabled) {
+      // MCP tools are dynamically discovered — allow any mcp: prefixed name
+      if (tool.startsWith('mcp:')) continue;
       if (!availableTools.includes(tool)) {
         errors.push(`Unknown tool '${tool}' in enabled tools list`);
       }

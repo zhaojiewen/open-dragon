@@ -43,7 +43,10 @@ export abstract class BaseTool {
   protected validateParams(params: Record<string, unknown>, schema: z.ZodType): void {
     const result = schema.safeParse(params);
     if (!result.success) {
-      throw new Error(`Invalid parameters: ${result.error.message}`);
+      const messages = result.error.issues.map(i =>
+        `${i.path.join('.')}: ${i.message}`
+      );
+      throw new Error(`Invalid parameters: ${messages.join('; ')}`);
     }
   }
 

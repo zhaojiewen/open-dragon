@@ -204,6 +204,20 @@ export class ToolInvalidParamsError extends ToolError {
   }
 }
 
+// Skill Errors
+export class SkillNotFoundError extends ToolError {
+  constructor(skillName: string, available: string[]) {
+    super(
+      available.length > 0
+        ? `Skill "${skillName}" not found. Available: ${available.join(', ')}`
+        : `Skill "${skillName}" not found. No skills are available.`,
+      ErrorCode.TOOL_EXECUTION_FAILED,
+      { skillName, available },
+    );
+    this.name = 'SkillNotFoundError';
+  }
+}
+
 // File System Errors
 export class FileSystemError extends DragonError {
   constructor(message: string, code: ErrorCode, details?: Record<string, unknown>) {

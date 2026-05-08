@@ -14,6 +14,8 @@ import { getLogger } from './utils/logger.js';
 import { costTracker } from './utils/cost-tracker.js';
 import { HistoryCompactor } from './utils/history-compactor.js';
 import { perfMonitor } from './performance/index.js';
+import { loadAllSkills, buildSkillsPrompt } from './skills/index.js';
+import type { SkillDefinition } from './skills/index.js';
 
 const logger = getLogger();
 
@@ -162,8 +164,28 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
       }
     }
 
-    // Load system prompt from project files
+  // Load system prompt from project files
     resolvedSystemPrompt = loadSystemPrompt(process.cwd());
+
+    // Load and build skills section for the system prompt
+    const skills = loadAllSkills();
+    const skillsPrompt = buildSkillsPrompt(skills);
+    if (skillsPrompt) {
+      resolvedSystemPrompt += skillsPrompt;
+      // Wire skills into the SkillTool
+      toolRegistry.setSkills(skills);
+      logger.debug(`Loaded ${skills.length} skills into system prompt`);
+    }
+
+    // Initialize MCP servers and register their tools
+    if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+      try {
+        await toolRegistry.initializeMcpServers(config.mcpServers);
+        logger.info('MCP servers initialized');
+      } catch (err: any) {
+        logger.warn(`MCP initialization failed: ${err.message}`);
+      }
+    }
 
     const toolCount = toolRegistry.getToolDefinitions(config.tools?.enabled).length;
     const sandboxStatus = config.tools?.bash?.dangerouslyDisableSandbox
@@ -256,6 +278,7 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
         }
       }
       console.log(chalk.dim('\nGoodbye!'));
+      await toolRegistry.disconnectMcp();
       process.exit(0);
     });
   } else {
@@ -294,7 +317,8 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
       }
     });
 
-    rl.on('close', () => {
+    rl.on('close', async () => {
+      await toolRegistry.disconnectMcp();
       console.log(chalk.dim('\nGoodbye!'));
       process.exit(0);
     });
@@ -686,12 +710,11 @@ const TOKEN_SAVE_CONFIGS: Record<TokenSaveLevel, TokenSaveConfig> = {
     maxToolOutputSize: 50000,
   },
   aggressive: {
-    label: 'Aggressive — Haiku model, no thinking, 8K max, limited tools',
+    label: 'Aggressive — no thinking, 8K max, limited tools',
     thinking: undefined,
     effort: 'low',
     maxTokens: 8000,
     cacheControl: false,
-    modelSuffix: 'claude-haiku-4-5',
     limitTools: true,
     enableCompaction: false,
     maxToolOutputSize: 10000,
@@ -991,6 +1014,116 @@ async function handleWorkspaceCommand(
   }
 }
 
+async function handleSkillsCommand(args: string[], toolRegistry: ToolRegistry): Promise<void> {
+  const { loadAllSkills, reloadSkills, ensureSkillsDir, SKILLS_DIR } = await import('./skills/index.js');
+
+  const action = args[0]?.toLowerCase();
+
+  switch (action) {
+    case 'reload': {
+      const refreshed = reloadSkills();
+      toolRegistry.setSkills(refreshed);
+      console.log(chalk.green(`  ✓ Reloaded ${refreshed.length} skill(s) from ${SKILLS_DIR}`));
+      refreshed.forEach(s => {
+        console.log(chalk.dim(`    • ${s.name}: ${s.description.substring(0, 80)}${s.description.length > 80 ? '...' : ''}`));
+      });
+      return;
+    }
+    case 'create': {
+      const name = args[1];
+      if (!name) {
+        console.log(chalk.red('  Usage: /skills create <name>'));
+        console.log(chalk.dim('  Creates a new skill file in ' + SKILLS_DIR));
+        return;
+      }
+      // Sanitize the name
+      const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+      ensureSkillsDir();
+      const skillPath = path.join(SKILLS_DIR, `${safeName}.md`);
+      if (fs.existsSync(skillPath)) {
+        console.log(chalk.yellow(`  Skill "${safeName}" already exists at ${skillPath}`));
+        return;
+      }
+      const template = `---
+name: ${safeName}
+description: Describe what this skill does
+---
+
+# ${name}
+
+Write your skill instructions here. This content will be provided to the AI when it invokes the \`skill\` tool with \`name: ${safeName}\`.
+
+## Guidelines
+
+- Be specific about what the skill should accomplish
+- Include examples if helpful
+- Reference tools the AI should use: bash, read, write, edit, glob, grep, webfetch, websearch, agent
+`;
+      fs.writeFileSync(skillPath, template);
+      console.log(chalk.green(`  ✓ Created skill: ${skillPath}`));
+      console.log(chalk.dim('  Edit this file to define your skill, then /skills reload to activate it.'));
+      return;
+    }
+    case 'edit': {
+      const name = args[1];
+      if (!name) {
+        console.log(chalk.red('  Usage: /skills edit <name>'));
+        return;
+      }
+      ensureSkillsDir();
+      const skillPath = path.join(SKILLS_DIR, `${name}.md`);
+      if (!fs.existsSync(skillPath)) {
+        // Try directory form
+        const dirPath = path.join(SKILLS_DIR, name);
+        const innerPath = path.join(dirPath, 'SKILL.md');
+        if (fs.existsSync(innerPath)) {
+          const editor = process.env.EDITOR || 'vi';
+          const { spawnSync } = await import('child_process');
+          console.log(chalk.dim(`Opening skill in ${editor}: ${innerPath}`));
+          spawnSync(editor, [innerPath], { stdio: 'inherit' });
+          return;
+        }
+        console.log(chalk.red(`  Skill "${name}" not found in ${SKILLS_DIR}`));
+        return;
+      }
+      const editor = process.env.EDITOR || 'vi';
+      const { spawnSync } = await import('child_process');
+      console.log(chalk.dim(`Opening skill in ${editor}: ${skillPath}`));
+      spawnSync(editor, [skillPath], { stdio: 'inherit' });
+      return;
+    }
+    default: {
+      const skills = loadAllSkills();
+      if (skills.length === 0) {
+        console.log(chalk.yellow('\n  No skills found.'));
+        console.log(chalk.dim(`  Skills directory: ${SKILLS_DIR}`));
+        console.log(chalk.dim('  /skills create <name>   Create a new skill'));
+        console.log(chalk.dim('  /skills reload           Reload all skills'));
+        console.log();
+        return;
+      }
+
+      console.log(chalk.yellow(`\n  Skills (${skills.length}):`));
+      console.log(chalk.dim(`  Directory: ${SKILLS_DIR}`));
+      console.log();
+      for (const skill of skills) {
+        const contentPreview = skill.content
+          ? skill.content.substring(0, 60).replace(/\n/g, ' ') + (skill.content.length > 60 ? '...' : '')
+          : '(empty body)';
+        console.log(`  ${chalk.cyan(skill.name)}`);
+        console.log(chalk.dim(`    ${skill.description}`));
+        console.log(chalk.dim(`    ${contentPreview}`));
+        console.log();
+      }
+      console.log(chalk.dim('  /skills create <name>   Create a new skill'));
+      console.log(chalk.dim('  /skills edit <name>     Edit a skill in $EDITOR'));
+      console.log(chalk.dim('  /skills reload           Reload all skills'));
+      console.log();
+      return;
+    }
+  }
+}
+
 async function handleCommand(
   input: string,
   config: DragonConfig,
@@ -1011,6 +1144,7 @@ async function handleCommand(
       console.log('  /provider    Show or change provider (e.g. /provider openai)');
       console.log('  /model       Show or change model (e.g. /model claude-sonnet-4-6)');
       console.log('  /tools       List available tools');
+      console.log('  /skills      List user-defined skills');
       console.log('  /auto        Toggle auto-approve all dangerous tools');
       console.log('  /ask         Require confirmation for all dangerous tools');
       console.log('  /workspace   Manage workspace paths (add/on/off)');
@@ -1126,6 +1260,7 @@ async function handleCommand(
         const fileTools = allTools.filter(t => ['read', 'write', 'edit', 'glob', 'grep'].includes(t.name));
         const execTools = allTools.filter(t => ['bash', 'agent'].includes(t.name));
         const webTools = allTools.filter(t => ['webfetch', 'websearch'].includes(t.name));
+        const customTools = allTools.filter(t => !['read', 'write', 'edit', 'glob', 'grep', 'bash', 'agent', 'webfetch', 'websearch'].includes(t.name));
 
         const formatTool = (t: { name: string; description: string }) => {
           const enabled = enabledSet.has(t.name) ? chalk.green('✓') : chalk.dim('✗');
@@ -1145,8 +1280,16 @@ async function handleCommand(
           console.log(chalk.dim('  Web:'));
           webTools.forEach(t => console.log(formatTool(t)));
         }
+        if (customTools.length) {
+          console.log(chalk.dim('  Skills:'));
+          customTools.forEach(t => console.log(formatTool(t)));
+        }
         console.log();
       }
+      return true;
+
+    case 'skills':
+      await handleSkillsCommand(args, toolRegistry);
       return true;
 
     case 'perf':
