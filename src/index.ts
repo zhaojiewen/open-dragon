@@ -2,6 +2,8 @@
 
 import { spawnSync } from 'child_process';
 import { stdin as stdinStream, stdout as stdoutStream } from 'process';
+import * as path from 'path';
+import * as os from 'os';
 import { program } from 'commander';
 import { startRepl } from './repl.js';
 import { initConfig } from './config/index.js';
@@ -10,7 +12,7 @@ import { getLogger, LogLevel } from './utils/logger.js';
 import chalk from 'chalk';
 import figlet from 'figlet';
 
-const VERSION = '1.3.4';
+const VERSION = '1.3.5';
 const logger = getLogger();
 
 // Handle environment variables
@@ -90,7 +92,7 @@ program
   .command('config [action]')
   .description('Show or edit configuration file')
   .action(async (action) => {
-    const configPath = process.env.HOME + '/.dragon/config.json';
+    const configPath = path.join(process.env.HOME || os.homedir(), '.dragon', 'config.json');
 
     switch (action) {
       case 'edit': {

@@ -45,6 +45,13 @@ export const McpServerConfigSchema = z.object({
 
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
 
+export const AutoSkillConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  intervalMinutes: z.number().min(5).default(15),
+});
+
+export type AutoSkillConfig = z.infer<typeof AutoSkillConfigSchema>;
+
 export const DragonConfigSchema = z.object({
   defaultProvider: z.string().default('anthropic'),
   defaultTokenSaveLevel: z.enum(['off', 'mild', 'moderate', 'aggressive']).default('off'),
@@ -53,6 +60,7 @@ export const DragonConfigSchema = z.object({
   logging: LogConfigSchema.optional(),
   workspace: WorkspaceConfigSchema.optional(),
   mcpServers: z.record(z.string(), McpServerConfigSchema).default({}),
+  autoSkill: AutoSkillConfigSchema.optional(),
 }).refine((config) => {
   // Validate that defaultProvider exists in providers
   if (Object.keys(config.providers).length > 0 && !config.providers[config.defaultProvider]) {

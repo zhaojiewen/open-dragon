@@ -8,6 +8,10 @@ import type {
   StreamChunk,
   ToolCall,
 } from './base.js';
+import { ApiKeyMissingError } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
+
+const logger = getLogger();
 
 const CHINESE_PROVIDERS: Record<string, { baseUrl: string; models: string[]; defaultModel: string }> = {
   qwen: {
@@ -49,6 +53,12 @@ export class ChineseProvider extends BaseProvider {
   }) {
     super();
     this.name = config.name;
+
+    // Validate API key
+    const placeholderKey = `YOUR_${config.name.toUpperCase()}_API_KEY`;
+    if (!config.apiKey || config.apiKey === placeholderKey) {
+      throw new ApiKeyMissingError(config.name);
+    }
 
     const providerConfig = CHINESE_PROVIDERS[config.name] || {
       baseUrl: config.baseUrl || '',
@@ -99,11 +109,24 @@ export class ChineseProvider extends BaseProvider {
 
     if (choice.message.tool_calls) {
       for (const tc of choice.message.tool_calls) {
-        toolCalls.push({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        });
+        try {
+          toolCalls.push({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: JSON.parse(tc.function.arguments),
+          });
+        } catch (parseError) {
+          logger.warn(`Failed to parse tool call arguments for ${tc.function.name}`, {
+            toolCallId: tc.id,
+            arguments: tc.function.arguments.substring(0, 100),
+            error: parseError instanceof Error ? parseError.message : String(parseError),
+          });
+          toolCalls.push({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: {},
+          });
+        }
       }
     }
 
@@ -131,6 +154,7 @@ export class ChineseProvider extends BaseProvider {
       max_tokens: options?.maxTokens || 4096,
       temperature: 0.7,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (tools && tools.length > 0) {
@@ -146,11 +170,96 @@ export class ChineseProvider extends BaseProvider {
 
     const stream = await this.client.chat.completions.create(requestParams);
 
+    let currentToolCall: Partial<ToolCall> = {};
+    let currentToolArgs = '';
+
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
         yield { type: 'text', text: delta.content };
+      }
+
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          if (tc.id) {
+            if (currentToolCall.id) {
+              try {
+                yield {
+                  type: 'tool_use',
+                  toolCall: {
+                    ...currentToolCall,
+                    arguments: JSON.parse(currentToolArgs),
+                  },
+                  isComplete: true,
+                };
+              } catch (parseError) {
+                logger.warn(`Failed to parse streaming tool call arguments for ${currentToolCall.name}`, {
+                  toolCallId: currentToolCall.id,
+                  argumentsLength: currentToolArgs.length,
+                  argumentsPreview: currentToolArgs.substring(0, 100),
+                  error: parseError instanceof Error ? parseError.message : String(parseError),
+                });
+                yield {
+                  type: 'tool_use',
+                  toolCall: {
+                    ...currentToolCall,
+                    arguments: {},
+                  },
+                  isComplete: true,
+                };
+              }
+            }
+            currentToolCall = { id: tc.id, name: tc.function?.name };
+            currentToolArgs = '';
+          }
+          if (tc.function?.arguments) {
+            currentToolArgs += tc.function.arguments;
+          }
+          if (tc.function?.name) {
+            currentToolCall.name = tc.function.name;
+          }
+        }
+      }
+
+      // Yield usage data from the final chunk
+      if (chunk.usage) {
+        yield {
+          type: 'usage',
+          usage: {
+            inputTokens: chunk.usage.prompt_tokens || 0,
+            outputTokens: chunk.usage.completion_tokens || 0,
+          },
+        };
+      }
+    }
+
+    // Yield any remaining tool call at stream end
+    if (currentToolCall.id) {
+      try {
+        yield {
+          type: 'tool_use',
+          toolCall: {
+            ...currentToolCall,
+            arguments: JSON.parse(currentToolArgs),
+          },
+          isComplete: true,
+        };
+      } catch (parseError) {
+        logger.warn(`Failed to parse final streaming tool call arguments for ${currentToolCall.name}`, {
+          toolCallId: currentToolCall.id,
+          argumentsLength: currentToolArgs.length,
+          argumentsPreview: currentToolArgs.substring(0, 100),
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        yield {
+          type: 'tool_use',
+          toolCall: {
+            ...currentToolCall,
+            arguments: {},
+          },
+          isComplete: true,
+        };
       }
     }
   }

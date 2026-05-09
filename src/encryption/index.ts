@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { ConfigError, ErrorCode } from '../utils/errors.js';
 import { getLogger } from '../utils/logger.js';
 
@@ -26,7 +27,7 @@ export class EncryptionService {
   private keyPath: string;
 
   constructor(keyPath?: string) {
-    this.keyPath = keyPath || path.join(process.env.HOME || '.', '.dragon', '.key');
+    this.keyPath = keyPath || path.join(process.env.HOME || os.homedir(), '.dragon', '.key');
   }
 
   /**

@@ -215,6 +215,9 @@ export function buildSkillsPrompt(skills: SkillDefinition[]): string {
     `Available skills: ${skillNames}.`,
     'To load a skill\'s full instructions, use the `skill` tool with the skill name.',
     'To list available skills with descriptions, call the `skill` tool with no arguments.',
+    'You can also create or update a skill using the `skill` tool with `action: "create"` —',
+    'provide `name`, `description`, and `content` to persist a reusable workflow.',
+    'Proactively create skills when the user teaches you a repeatable pattern, convention, or workflow.',
     '',
   ].join('\n');
 }
@@ -231,6 +234,52 @@ export function listSkillDescriptions(skills: SkillDefinition[]): string {
  */
 export function findSkill(skills: SkillDefinition[], name: string): SkillDefinition | undefined {
   return skills.find(s => s.name === name);
+}
+
+/**
+ * Save a skill to the skills directory.
+ * Overwrites if a skill with the same name already exists.
+ * Returns the file path of the saved skill.
+ */
+export function saveSkill(name: string, description: string, content: string): string {
+  ensureSkillsDir();
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+  const filePath = path.join(SKILLS_DIR, `${safeName}.md`);
+
+  const frontmatter = [
+    '---',
+    `name: ${safeName}`,
+    `description: "${description.replace(/"/g, '\\"')}"`,
+    '---',
+  ].join('\n');
+
+  fs.writeFileSync(filePath, `${frontmatter}\n\n${content}`);
+  logger.debug(`Saved skill "${safeName}" to ${filePath}`);
+  return filePath;
+}
+
+/**
+ * Delete a skill file by name.
+ * Returns true if deleted, false if the skill was not found.
+ */
+export function deleteSkill(name: string): boolean {
+  const filePath = path.join(SKILLS_DIR, `${name}.md`);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    logger.debug(`Deleted skill file: ${filePath}`);
+    return true;
+  }
+  // Try directory form
+  const dirPath = path.join(SKILLS_DIR, name);
+  const innerPath = path.join(dirPath, 'SKILL.md');
+  if (fs.existsSync(innerPath)) {
+    fs.unlinkSync(innerPath);
+    // Try to remove the directory if empty
+    try { fs.rmdirSync(dirPath); } catch {}
+    logger.debug(`Deleted skill file: ${innerPath}`);
+    return true;
+  }
+  return false;
 }
 
 /**

@@ -8,6 +8,10 @@ import type {
   StreamChunk,
   ToolCall,
 } from './base.js';
+import { ApiKeyMissingError } from '../utils/errors.js';
+import { getLogger } from '../utils/logger.js';
+
+const logger = getLogger();
 
 export class OpenAIProvider extends BaseProvider {
   readonly name = 'openai';
@@ -24,6 +28,12 @@ export class OpenAIProvider extends BaseProvider {
     defaultModel?: string;
   }) {
     super();
+
+    // Validate API key
+    if (!config.apiKey || config.apiKey === 'YOUR_OPENAI_API_KEY') {
+      throw new ApiKeyMissingError('openai');
+    }
+
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl;
     this.models = config.models || ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'];
@@ -66,11 +76,24 @@ export class OpenAIProvider extends BaseProvider {
 
     if (choice.message.tool_calls) {
       for (const tc of choice.message.tool_calls) {
-        toolCalls.push({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        });
+        try {
+          toolCalls.push({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: JSON.parse(tc.function.arguments),
+          });
+        } catch (parseError) {
+          logger.warn(`Failed to parse tool call arguments for ${tc.function.name}`, {
+            toolCallId: tc.id,
+            arguments: tc.function.arguments.substring(0, 100),
+            error: parseError instanceof Error ? parseError.message : String(parseError),
+          });
+          toolCalls.push({
+            id: tc.id,
+            name: tc.function.name,
+            arguments: {},
+          });
+        }
       }
     }
 
@@ -98,6 +121,7 @@ export class OpenAIProvider extends BaseProvider {
       max_tokens: options?.maxTokens || 4096,
       temperature: 0.7,
       stream: true,
+      stream_options: { include_usage: true },
     };
 
     if (tools && tools.length > 0) {
@@ -127,14 +151,31 @@ export class OpenAIProvider extends BaseProvider {
         for (const tc of delta.tool_calls) {
           if (tc.id) {
             if (currentToolCall.id) {
-              yield {
-                type: 'tool_use',
-                toolCall: {
-                  ...currentToolCall,
-                  arguments: JSON.parse(currentToolArgs),
-                },
-                isComplete: true,
-              };
+              try {
+                yield {
+                  type: 'tool_use',
+                  toolCall: {
+                    ...currentToolCall,
+                    arguments: JSON.parse(currentToolArgs),
+                  },
+                  isComplete: true,
+                };
+              } catch (parseError) {
+                logger.warn(`Failed to parse streaming tool call arguments for ${currentToolCall.name}`, {
+                  toolCallId: currentToolCall.id,
+                  argumentsLength: currentToolArgs.length,
+                  argumentsPreview: currentToolArgs.substring(0, 100),
+                  error: parseError instanceof Error ? parseError.message : String(parseError),
+                });
+                yield {
+                  type: 'tool_use',
+                  toolCall: {
+                    ...currentToolCall,
+                    arguments: {},
+                  },
+                  isComplete: true,
+                };
+              }
             }
             currentToolCall = { id: tc.id, name: tc.function?.name };
             currentToolArgs = '';
@@ -147,17 +188,45 @@ export class OpenAIProvider extends BaseProvider {
           }
         }
       }
+
+      // Yield usage data from the final chunk
+      if (chunk.usage) {
+        yield {
+          type: 'usage',
+          usage: {
+            inputTokens: chunk.usage.prompt_tokens || 0,
+            outputTokens: chunk.usage.completion_tokens || 0,
+          },
+        };
+      }
     }
 
     if (currentToolCall.id) {
-      yield {
-        type: 'tool_use',
-        toolCall: {
-          ...currentToolCall,
-          arguments: JSON.parse(currentToolArgs),
-        },
-        isComplete: true,
-      };
+      try {
+        yield {
+          type: 'tool_use',
+          toolCall: {
+            ...currentToolCall,
+            arguments: JSON.parse(currentToolArgs),
+          },
+          isComplete: true,
+        };
+      } catch (parseError) {
+        logger.warn(`Failed to parse final streaming tool call arguments for ${currentToolCall.name}`, {
+          toolCallId: currentToolCall.id,
+          argumentsLength: currentToolArgs.length,
+          argumentsPreview: currentToolArgs.substring(0, 100),
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        yield {
+          type: 'tool_use',
+          toolCall: {
+            ...currentToolCall,
+            arguments: {},
+          },
+          isComplete: true,
+        };
+      }
     }
   }
 

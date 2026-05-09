@@ -15,6 +15,8 @@ import { perfMonitor } from '../performance/index.js';
 const logger = getLogger();
 
 const MAX_CACHE_BREAKPOINTS = 4;
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY_MS = 1000;
 
 export class AnthropicProvider extends BaseProvider {
   readonly name = 'anthropic';
@@ -73,44 +75,67 @@ export class AnthropicProvider extends BaseProvider {
       }));
     }
 
-    try {
-      logger.debug(`Sending chat request to Anthropic API (model: ${requestParams.model})`);
+    let lastError: Error | null = null;
 
-      const response = await perfMonitor.measure('anthropic:chat', () =>
-        this.client.messages.create(requestParams as Anthropic.Messages.MessageCreateParams)
-      ) as Anthropic.Messages.Message;
-
-      const toolCalls: ToolCall[] = [];
-      let textContent = '';
-
-      for (const block of response.content) {
-        if (block.type === 'text') {
-          textContent += block.text;
-        } else if (block.type === 'tool_use') {
-          toolCalls.push({
-            id: block.id,
-            name: block.name,
-            arguments: block.input as Record<string, unknown>,
-          });
-        }
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        logger.debug(`Retrying chat request (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${delay}ms delay`);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
 
-      logger.debug(`Chat completed (tokens: ${response.usage.input_tokens} in, ${response.usage.output_tokens} out)`);
+      try {
+        logger.debug(`Sending chat request to Anthropic API (model: ${requestParams.model})`);
 
-      return {
-        content: textContent,
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        stopReason: this.mapStopReason(response.stop_reason),
-        usage: {
-          inputTokens: response.usage.input_tokens,
-          outputTokens: response.usage.output_tokens,
-          cacheCreationTokens: response.usage.cache_creation_input_tokens ?? undefined,
-          cacheReadTokens: response.usage.cache_read_input_tokens ?? undefined,
-        },
-      };
-    } catch (error: unknown) {
-      this.handleError(error);
+        const response = await perfMonitor.measure('anthropic:chat', () =>
+          this.client.messages.create(requestParams as Anthropic.Messages.MessageCreateParams)
+        ) as Anthropic.Messages.Message;
+
+        const toolCalls: ToolCall[] = [];
+        let textContent = '';
+
+        for (const block of response.content) {
+          if (block.type === 'text') {
+            textContent += block.text;
+          } else if (block.type === 'tool_use') {
+            toolCalls.push({
+              id: block.id,
+              name: block.name,
+              arguments: block.input as Record<string, unknown>,
+            });
+          }
+        }
+
+        logger.debug(`Chat completed (tokens: ${response.usage.input_tokens} in, ${response.usage.output_tokens} out)`);
+
+        return {
+          content: textContent,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          stopReason: this.mapStopReason(response.stop_reason),
+          usage: {
+            inputTokens: response.usage.input_tokens,
+            outputTokens: response.usage.output_tokens,
+            cacheCreationTokens: response.usage.cache_creation_input_tokens ?? undefined,
+            cacheReadTokens: response.usage.cache_read_input_tokens ?? undefined,
+          },
+        };
+      } catch (error: unknown) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (error instanceof Anthropic.APIConnectionError && attempt < MAX_RETRIES) {
+          logger.debug(`Connection error on attempt ${attempt + 1}, will retry`);
+          continue;
+        }
+
+        this.handleError(error);
+      }
     }
+
+    if (lastError) {
+      this.handleError(lastError);
+    }
+    // TypeScript doesn't infer that handleError (which returns never) always throws
+    throw lastError!;
   }
 
   async *stream(
@@ -304,10 +329,34 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     if (error instanceof Anthropic.APIConnectionError) {
+      const cause = (error as any).cause;
+      const causeInfo: Record<string, unknown> = { originalError: error };
+      let detailMsg = '';
+
+      if (cause instanceof Error) {
+        causeInfo.causeMessage = cause.message;
+        causeInfo.causeName = cause.name;
+        detailMsg = ` (cause: ${cause.message})`;
+      } else if (cause && typeof cause === 'object') {
+        causeInfo.causeMessage = String((cause as any).message || cause);
+        causeInfo.causeName = (cause as any).name || 'unknown';
+        detailMsg = ` (cause: ${causeInfo.causeMessage})`;
+      }
+
+      const adviceMsg = '\n\nPossible causes:\n' +
+        '  - No internet connection\n' +
+        '  - Firewall/proxy blocking api.anthropic.com\n' +
+        '  - Regional network restrictions\n' +
+        '\nSolutions:\n' +
+        '  - Check network connectivity\n' +
+        '  - Try a different provider (e.g., deepseek, qwen) with /provider\n' +
+        '  - Use a VPN or proxy if in restricted region\n' +
+        '  - Check if ANTHROPIC_BASE_URL env var is set correctly';
+
       throw new ApiRequestError(
-        `Anthropic connection error: ${error.message}`,
+        `Anthropic connection error: ${error.message}${detailMsg}${adviceMsg}`,
         'anthropic',
-        { originalError: error }
+        causeInfo
       );
     }
 

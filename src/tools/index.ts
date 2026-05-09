@@ -15,6 +15,7 @@ import { SkillTool } from '../skills/skill-tool.js';
 import type { SkillDefinition } from '../skills/types.js';
 import { McpClientManager } from './mcp-client.js';
 import type { McpServerConfig } from '../config/schema.js';
+import * as os from 'os';
 
 export * from './base.js';
 
@@ -77,7 +78,7 @@ export class ToolRegistry {
       this.context.writeScope = paths;
       this.context.readScope = readPaths || [
         ...paths,
-        ...(process.env.HOME ? [process.env.HOME] : []),
+        ...(process.env.HOME ? [process.env.HOME] : [os.homedir()]),
       ];
       this.context.allowedPaths = paths; // backward compat
     } else {

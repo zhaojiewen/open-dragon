@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import chalk from 'chalk';
 import { DragonConfigSchema, DEFAULT_CONFIG } from './schema.js';
 import type { DragonConfig } from './schema.js';
@@ -8,7 +9,7 @@ import { secureConfigManager, encryptionService } from '../encryption/index.js';
 import { getLogger } from '../utils/logger.js';
 
 const logger = getLogger();
-const CONFIG_DIR = path.join(process.env.HOME || '~', '.dragon');
+const CONFIG_DIR = path.join(process.env.HOME || os.homedir(), '.dragon');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export async function loadConfig(useEncryption: boolean = false): Promise<DragonConfig> {
