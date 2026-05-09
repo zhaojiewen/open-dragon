@@ -9,6 +9,7 @@ import os from 'os';
 import chalk from 'chalk';
 import { loadConfig } from '../config/index.js';
 import type { DragonConfig } from '../config/index.js';
+import { detectAndMigrateClaudeEnv } from '../config/claude-sync.js';
 import { createProvider } from '../providers/index.js';
 import type { AIProvider } from '../providers/index.js';
 import { ToolRegistry, createToolRegistry } from '../tools/index.js';
@@ -92,6 +93,7 @@ export async function startRepl(options: ReplOptions = {}): Promise<void> {
 
   try {
     config = await loadConfig(options.enableEncryption);
+    await detectAndMigrateClaudeEnv(config, options.enableEncryption);
     const providerName = options.provider || config.defaultProvider;
     provider = createProvider(providerName, config);
     sessionState.provider = provider;
