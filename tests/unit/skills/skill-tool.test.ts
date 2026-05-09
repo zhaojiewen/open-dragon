@@ -1,6 +1,16 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SkillTool } from '../../../src/skills/skill-tool.js';
 import type { SkillDefinition } from '../../../src/skills/types.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+const SKILLS_DIR = path.join(os.homedir(), '.dragon', 'skills');
+
+function cleanupSkillFile(name: string) {
+  const filePath = path.join(SKILLS_DIR, `${name}.md`);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+}
 
 describe('SkillTool', () => {
   const createSkill = (overrides: Partial<SkillDefinition> = {}): SkillDefinition => ({
@@ -20,6 +30,17 @@ describe('SkillTool', () => {
       expect(def.name).toBe('skill');
       expect(def.description).toContain('skill');
       expect(def.parameters).toHaveProperty('properties');
+    });
+
+    it('should have correct parameter properties', () => {
+      const tool = new SkillTool();
+      const def = tool.getDefinition();
+
+      expect(def.parameters.properties).toHaveProperty('action');
+      expect(def.parameters.properties).toHaveProperty('name');
+      expect(def.parameters.properties).toHaveProperty('description');
+      expect(def.parameters.properties).toHaveProperty('content');
+      expect(def.parameters.type).toBe('object');
     });
   });
 
@@ -49,9 +70,33 @@ describe('SkillTool', () => {
       expect(result.success).toBe(true);
       expect(result.output).toContain('No user-defined skills');
     });
+
+    it('should list skills with action: list', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([
+        createSkill({ name: 'skill-a', description: 'First skill' }),
+      ]);
+
+      const result = await tool.execute({ action: 'list' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('skill-a');
+      expect(result.output).toContain('Available skills');
+    });
+
+    it('should return no-skills message for list action with empty skills', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([]);
+
+      const result = await tool.execute({ action: 'list' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('No user-defined skills');
+      expect(result.output).toContain('Create skill files');
+    });
   });
 
-  describe('execute', () => {
+  describe('execute - load mode', () => {
     it('should return skill content for a known skill', async () => {
       const tool = new SkillTool();
       tool.setSkills([createSkill()]);
@@ -95,6 +140,17 @@ describe('SkillTool', () => {
 
       expect(result.success).toBe(true);
       expect(result.output).toContain('no content body');
+      expect(result.output).toContain('empty-skill');
+    });
+
+    it('should handle whitespace-only skill content', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([createSkill({ name: 'whitespace-skill', content: '   \n  \n  ' })]);
+
+      const result = await tool.execute({ name: 'whitespace-skill' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('no content body');
     });
 
     it('should track invoked skills and avoid re-injecting content', async () => {
@@ -127,6 +183,189 @@ describe('SkillTool', () => {
 
       expect(result.output).toContain('Does magic things');
     });
+
+    it('should load with action: load', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([createSkill()]);
+
+      const result = await tool.execute({ action: 'load', name: 'test-skill' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Follow these steps');
+    });
+
+    it('should fall back to list when load has no name', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([createSkill({ name: 'skill-a' })]);
+
+      const result = await tool.execute({ action: 'load' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Available skills');
+      expect(result.output).toContain('skill-a');
+    });
+
+    it('should fall back to no-skills message when load has no name and empty skills', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([]);
+
+      const result = await tool.execute({ action: 'load' });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('No user-defined skills');
+    });
+  });
+
+  describe('execute - create mode', () => {
+    afterEach(() => {
+      cleanupSkillFile('test-create');
+      cleanupSkillFile('test-create-new');
+    });
+
+    it('should create a new skill file', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'create',
+        name: 'test-create',
+        description: 'A newly created skill',
+        content: '## New Skill\n\nDo something new.',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Created skill');
+      expect(result.output).toContain('test-create');
+      expect(result.output).toContain('Skills reloaded');
+
+      // Verify file was created
+      const filePath = path.join(SKILLS_DIR, 'test-create.md');
+      expect(fs.existsSync(filePath)).toBe(true);
+    });
+
+    it('should require name for create', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'create',
+        description: 'Missing name',
+        content: 'content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('name is required for create/update');
+    });
+
+    it('should require description for create', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'create',
+        name: 'test-create',
+        content: 'content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('description is required for create/update');
+    });
+
+    it('should require content for create', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'create',
+        name: 'test-create',
+        description: 'Missing content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('content is required for create/update');
+    });
+
+    it('should reload skills after create', async () => {
+      const tool = new SkillTool();
+      tool.setSkills([]);
+
+      await tool.execute({
+        action: 'create',
+        name: 'test-create-new',
+        description: 'Created skill',
+        content: 'Content',
+      });
+
+      // Now the skill should be available
+      const result = await tool.execute({ name: 'test-create-new' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Created skill');
+    });
+  });
+
+  describe('execute - update mode', () => {
+    afterEach(() => {
+      cleanupSkillFile('test-update');
+    });
+
+    it('should update an existing skill file', async () => {
+      const tool = new SkillTool();
+
+      // Create first
+      await tool.execute({
+        action: 'create',
+        name: 'test-update',
+        description: 'Original description',
+        content: 'Original content',
+      });
+
+      // Update
+      const result = await tool.execute({
+        action: 'update',
+        name: 'test-update',
+        description: 'Updated description',
+        content: 'Updated content',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Updated skill');
+      expect(result.output).toContain('test-update');
+    });
+
+    it('should require name for update', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'update',
+        description: 'Missing name',
+        content: 'content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('name is required for create/update');
+    });
+
+    it('should require description for update', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'update',
+        name: 'test-update',
+        content: 'content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('description is required for create/update');
+    });
+
+    it('should require content for update', async () => {
+      const tool = new SkillTool();
+
+      const result = await tool.execute({
+        action: 'update',
+        name: 'test-update',
+        description: 'Missing content',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('content is required for create/update');
+    });
   });
 
   describe('setSkills', () => {
@@ -138,7 +377,7 @@ describe('SkillTool', () => {
       let result = await tool.execute({ name: 'v1' });
       expect(result.success).toBe(true);
 
-      // Update skills — should clear tracking
+      // Update skills - should clear tracking
       tool.setSkills([createSkill({ name: 'v2' })]);
 
       result = await tool.execute({ name: 'v2' });
@@ -165,6 +404,66 @@ describe('SkillTool', () => {
       // Now can invoke again
       const result3 = await tool.execute({ name: 'test-skill' });
       expect(result3.output).toContain('Follow these steps');
+    });
+  });
+
+  describe('auto-load from disk', () => {
+    afterEach(() => {
+      cleanupSkillFile('auto-load-test');
+    });
+
+    it('should auto-load skills from disk when never explicitly set', async () => {
+      // Create a skill file
+      const filePath = path.join(SKILLS_DIR, 'auto-load-test.md');
+      const content = '---\nname: auto-load-test\ndescription: Auto loaded skill\n---\n\n## Auto loaded';
+      fs.writeFileSync(filePath, content);
+
+      const tool = new SkillTool();
+      // Don't call setSkills - should auto-load
+
+      const result = await tool.execute({ name: 'auto-load-test' });
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Auto loaded skill');
+    });
+
+    it('should list built-in skills when auto-loading', async () => {
+      const tool = new SkillTool();
+      // Don't call setSkills
+
+      const result = await tool.execute({ action: 'list' });
+      expect(result.success).toBe(true);
+      // Built-in skills should be present
+      expect(result.output).toContain('xlsx');
+    });
+  });
+
+  describe('validateParams', () => {
+    it('should throw on invalid action value', async () => {
+      const tool = new SkillTool();
+
+      await expect(tool.execute({ action: 'invalid-action' })).rejects.toThrow('Invalid parameters');
+    });
+
+    it('should throw on non-string description', async () => {
+      const tool = new SkillTool();
+
+      await expect(tool.execute({
+        action: 'create',
+        name: 'test',
+        description: 123,
+        content: 'test',
+      })).rejects.toThrow('Invalid parameters');
+    });
+
+    it('should throw on non-string content', async () => {
+      const tool = new SkillTool();
+
+      await expect(tool.execute({
+        action: 'create',
+        name: 'test',
+        description: 'test',
+        content: 123,
+      })).rejects.toThrow('Invalid parameters');
     });
   });
 });

@@ -99,7 +99,7 @@ export async function handleCommand(
       return true;
 
     case 'ask':
-      handleAskCommand(session);
+      handleAskCommand(args, session);
       return true;
 
     case 'workspace':
@@ -133,7 +133,7 @@ function showHelp(): void {
   console.log('  /tools       List available tools');
   console.log('  /skills      Manage skills (list, create, edit, delete, autogen)');
   console.log('  /auto        Toggle auto-approve all dangerous tools');
-  console.log('  /ask         Require confirmation for all dangerous tools');
+  console.log('  /ask         Require confirmation for dangerous tools');
   console.log('  /workspace   Manage workspace paths (add/on/off)');
   console.log('  /save-tokens Toggle token-saving eco mode (/eco)');
   console.log('  /autoskill   Configure auto skill generation interval');
@@ -416,11 +416,31 @@ function handleAutoCommand(args: string[], session: SessionState): void {
   }
 }
 
-function handleAskCommand(session: SessionState): void {
-  session.autoApproveTools = false;
-  session.autoApproveOutsideWorkspace = false;
-  console.log(chalk.green('  ✓ All dangerous tools require confirmation.'));
-  console.log(chalk.dim('  y=approve once  a=auto-approve all  n=deny'));
+export function handleAskCommand(args: string[], session: SessionState): void {
+  const subCommand = args[0]?.toLowerCase();
+
+  // No args: enable strict mode (require confirmation for all)
+  if (!subCommand || subCommand === 'on') {
+    session.autoApproveTools = false;
+    session.autoApproveOutsideWorkspace = false;
+    console.log(chalk.green('  ✓ Strict mode enabled.'));
+    console.log(chalk.dim('  ALL dangerous tools require confirmation.'));
+    console.log(chalk.dim('  y=approve once  a=auto-approve all  n=deny'));
+    return;
+  }
+
+  // Disable: auto-approve all
+  if (subCommand === 'off') {
+    session.autoApproveTools = true;
+    session.autoApproveOutsideWorkspace = true;
+    console.log(chalk.yellow('  ⚠ Auto-approve enabled for ALL tools.'));
+    console.log(chalk.dim('  /ask to require confirmation again.'));
+    return;
+  }
+
+  // Unknown option
+  console.log(chalk.red(`  Unknown option: ${subCommand}`));
+  console.log(chalk.dim('  Usage: /ask [on|off]'));
 }
 
 function handleSaveTokensCommand(args: string[], config: DragonConfig, session: SessionState): void {

@@ -139,6 +139,161 @@ describe('Config Loader', () => {
       const config = await loadConfig(true);
       expect(config).toBeDefined();
     });
+
+    it('should initialize security logging when logFile is configured', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      const mockSetLogFile = vi.fn();
+      const mockSetSecurityLogFile = vi.fn();
+      const mockSecurity = vi.fn();
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          setLogFile: mockSetLogFile,
+          setSecurityLogFile: mockSetSecurityLogFile,
+          security: mockSecurity,
+        }),
+      }));
+
+      vi.resetModules();
+
+      const configWithLogging = {
+        defaultProvider: 'openai',
+        providers: {
+          openai: {
+            apiKey: 'sk-test-key',
+          },
+        },
+        logging: {
+          logFile: '/var/log/dragon/app.log',
+        },
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(configWithLogging));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      await loadConfig();
+
+      expect(mockSetLogFile).toHaveBeenCalledWith('/var/log/dragon/app.log');
+      expect(mockSetSecurityLogFile).toHaveBeenCalledWith('/var/log/dragon/security.log');
+      expect(mockSecurity).toHaveBeenCalledWith('config_loaded', expect.objectContaining({
+        providers: expect.arrayContaining(['openai'])
+      }));
+    });
+
+    it('should re-throw ConfigInvalidError as is', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      // Create a config that passes JSON parse but fails schema validation
+      const invalidConfig = {
+        defaultProvider: 'nonexistent',
+        providers: {
+          openai: {
+            apiKey: 'sk-test-key',
+          },
+        },
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(invalidConfig));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      await expect(loadConfig()).rejects.toThrow();
+    });
+
+    it('should handle error with Error instance message', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      // Create config that will fail Zod validation
+      const invalidConfig = {
+        defaultProvider: { nested: 'object' }, // Should be string
+        providers: {},
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(invalidConfig));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      await expect(loadConfig()).rejects.toThrow();
+    });
+
+    it('should handle valid JSON config', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      // Write valid JSON that loads successfully
+      fs.writeFileSync(configFile, '{"providers": {"openai": {"apiKey": "test"}}}');
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      const config = await loadConfig();
+      expect(config).toBeDefined();
+    });
+
+    it('should throw ConfigInvalidError with details for SyntaxError', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configFile, '{invalid json}');
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      try {
+        await loadConfig();
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error.message).toContain('Invalid JSON');
+        expect(error.code).toBe(1002); // CONFIG_INVALID ErrorCode
+      }
+    });
+
+    it('should not decrypt when useEncryption is false', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      const decryptMock = vi.fn((config) => config);
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => true),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: decryptMock,
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const testConfig = {
+        providers: {
+          openai: { apiKey: 'test-key' },
+        },
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(testConfig));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      await loadConfig(false);
+
+      // decryptConfig should not be called when useEncryption is false
+      expect(decryptMock).not.toHaveBeenCalled();
+    });
   });
 
   describe('initConfig', () => {
@@ -218,6 +373,55 @@ describe('Config Loader', () => {
       const content = fs.readFileSync(configFile, 'utf-8');
       const parsed = JSON.parse(content);
       expect(parsed.encrypted).toBe(true);
+    });
+
+    it('should not encrypt when encryption service is not initialized', async () => {
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const { initConfig } = await import('../../../src/config/loader.js');
+      await initConfig(true, true);
+
+      const content = fs.readFileSync(configFile, 'utf-8');
+      const parsed = JSON.parse(content);
+      // Should have placeholder keys since encryption was not applied
+      expect(parsed.providers.openai.apiKey).toBe('YOUR_OPENAI_API_KEY');
+    });
+
+    it('should set correct file permissions', async () => {
+      const { initConfig } = await import('../../../src/config/loader.js');
+      await initConfig(true);
+
+      const stats = fs.statSync(configFile);
+      const mode = stats.mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
+    it('should set correct directory permissions', async () => {
+      const { initConfig } = await import('../../../src/config/loader.js');
+      await initConfig(true);
+
+      const stats = fs.statSync(configDir);
+      const mode = stats.mode & 0o777;
+      expect(mode).toBe(0o700);
     });
   });
 
@@ -310,6 +514,506 @@ describe('Config Loader', () => {
 
       const saved = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
       expect(saved.encrypted).toBeUndefined();
+    });
+
+    it('should create config directory if not exists', async () => {
+      const { saveConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      // Ensure directory doesn't exist
+      expect(fs.existsSync(configDir)).toBe(false);
+
+      saveConfig(DEFAULT_CONFIG);
+
+      expect(fs.existsSync(configDir)).toBe(true);
+      expect(fs.existsSync(configFile)).toBe(true);
+    });
+
+    it('should set correct file permissions', async () => {
+      const { saveConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      saveConfig(DEFAULT_CONFIG);
+
+      const stats = fs.statSync(configFile);
+      const mode = stats.mode & 0o777;
+      expect(mode).toBe(0o600);
+    });
+
+    it('should create directory with correct permissions', async () => {
+      const { saveConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      saveConfig(DEFAULT_CONFIG);
+
+      const stats = fs.statSync(configDir);
+      const mode = stats.mode & 0o777;
+      expect(mode).toBe(0o700);
+    });
+  });
+
+  describe('validateConfig', () => {
+    it('should return valid for correct config', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should return error for default provider not in providers', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'anthropic', // Not in providers
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain("Default provider 'anthropic' is not configured in providers");
+    });
+
+    it('should return error for missing API key', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+          anthropic: { apiKey: undefined }, // Missing API key
+        },
+        defaultProvider: 'openai',
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain("Provider 'anthropic' is missing API key");
+    });
+
+    it('should return error for placeholder API key', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'YOUR_OPENAI_API_KEY' },
+        },
+        defaultProvider: 'openai',
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain("Provider 'openai' has placeholder API key that needs to be replaced");
+    });
+
+    it('should return error for unknown tool in enabled tools', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+        tools: {
+          enabled: ['bash', 'unknown-tool'],
+        },
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain("Unknown tool 'unknown-tool' in enabled tools list");
+    });
+
+    it('should allow MCP tools with mcp: prefix', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+        tools: {
+          enabled: ['bash', 'mcp:custom-tool', 'mcp:another-tool'],
+        },
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should handle multiple validation errors', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'YOUR_OPENAI_API_KEY' }, // Placeholder
+          anthropic: {}, // Missing API key
+        },
+        defaultProvider: 'gemini', // Not in providers
+        tools: {
+          enabled: ['unknown-tool'],
+        },
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(1);
+      expect(result.errors).toContain("Default provider 'gemini' is not configured in providers");
+      expect(result.errors).toContain("Provider 'openai' has placeholder API key that needs to be replaced");
+      expect(result.errors).toContain("Provider 'anthropic' is missing API key");
+      expect(result.errors).toContain("Unknown tool 'unknown-tool' in enabled tools list");
+    });
+
+    it('should return no errors for empty tools.enabled', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+        tools: {
+          enabled: [],
+        },
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should handle config without tools config', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+        tools: undefined,
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should validate all known tools', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+        },
+        defaultProvider: 'openai',
+        tools: {
+          enabled: ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'webfetch', 'websearch', 'agent', 'skill'],
+        },
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should handle provider with empty object (missing apiKey)', async () => {
+      const { validateConfig } = await import('../../../src/config/loader.js');
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      const config = {
+        ...DEFAULT_CONFIG,
+        providers: {
+          openai: { apiKey: 'sk-test-key' },
+          emptyProvider: {}, // Missing apiKey
+        },
+        defaultProvider: 'openai',
+      };
+
+      const result = validateConfig(config);
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain("Provider 'emptyProvider' is missing API key");
+    });
+  });
+
+  describe('DEFAULT_CONFIG structure', () => {
+    it('should have all expected provider configurations', async () => {
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+
+      expect(DEFAULT_CONFIG.providers).toHaveProperty('openai');
+      expect(DEFAULT_CONFIG.providers).toHaveProperty('anthropic');
+      expect(DEFAULT_CONFIG.providers).toHaveProperty('gemini');
+      expect(DEFAULT_CONFIG.providers).toHaveProperty('deepseek');
+      expect(DEFAULT_CONFIG.providers).toHaveProperty('qwen');
+    });
+
+    it('should have default provider set to anthropic', async () => {
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+      expect(DEFAULT_CONFIG.defaultProvider).toBe('anthropic');
+    });
+
+    it('should have enabled tools', async () => {
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+      expect(DEFAULT_CONFIG.tools?.enabled).toContain('bash');
+      expect(DEFAULT_CONFIG.tools?.enabled).toContain('read');
+      expect(DEFAULT_CONFIG.tools?.enabled).toContain('write');
+      expect(DEFAULT_CONFIG.tools?.enabled).toContain('edit');
+    });
+
+    it('should have correct qwen base URL', async () => {
+      const { DEFAULT_CONFIG } = await import('../../../src/config/schema.js');
+      expect(DEFAULT_CONFIG.providers.qwen.baseUrl).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1');
+    });
+  });
+
+  describe('Config file path handling', () => {
+    it('should use HOME environment variable for config path', async () => {
+      // Set a custom HOME
+      const customHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dragon-custom-home-'));
+      process.env.HOME = customHome;
+
+      vi.resetModules();
+
+      const { getConfigPath } = await import('../../../src/config/loader.js');
+      const configPath = getConfigPath();
+
+      expect(configPath).toBe(path.join(customHome, '.dragon', 'config.json'));
+
+      // Cleanup
+      fs.rmSync(customHome, { recursive: true, force: true });
+    });
+
+    it('should fallback to os.homedir() when HOME is not set', async () => {
+      const originalHome = process.env.HOME;
+      delete process.env.HOME;
+
+      vi.resetModules();
+
+      const { getConfigPath } = await import('../../../src/config/loader.js');
+      const configPath = getConfigPath();
+
+      expect(configPath).toBe(path.join(os.homedir(), '.dragon', 'config.json'));
+
+      // Restore
+      process.env.HOME = originalHome;
+    });
+  });
+
+  describe('Error handling', () => {
+    it('should throw ConfigNotFoundError with correct path', async () => {
+      const { loadConfig } = await import('../../../src/config/loader.js');
+
+      try {
+        await loadConfig();
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error.message).toContain('Configuration file not found');
+        expect(error.details?.configPath).toBe(configFile);
+      }
+    });
+
+    it('should throw ConfigInvalidError for JSON syntax errors', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configFile, '{invalid json');
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+
+      try {
+        await loadConfig();
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error.message).toContain('Invalid JSON');
+      }
+    });
+
+    it('should include original error message in ConfigInvalidError', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      // This will fail Zod validation
+      fs.writeFileSync(configFile, JSON.stringify({
+        defaultProvider: 123, // Should be string
+        providers: {},
+      }));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+
+      try {
+        await loadConfig();
+        expect.fail('Should have thrown');
+      } catch (error) {
+        expect(error.message).toContain('Failed to load config file');
+      }
+    });
+  });
+
+  describe('Encryption edge cases', () => {
+    it('should handle encryption disabled when useEncryption is true but service not initialized', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const testConfig = {
+        providers: {
+          openai: { apiKey: 'test-key' },
+        },
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(testConfig));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      const config = await loadConfig(true);
+
+      expect(config).toBeDefined();
+      expect(config.providers.openai.apiKey).toBe('test-key');
+    });
+  });
+
+  describe('Logging behavior', () => {
+    it('should log debug messages during config load', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+
+      const mockDebug = vi.fn();
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: mockDebug,
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const testConfig = {
+        providers: {
+          openai: { apiKey: 'test-key' },
+        },
+      };
+
+      fs.writeFileSync(configFile, JSON.stringify(testConfig));
+
+      const { loadConfig } = await import('../../../src/config/loader.js');
+      await loadConfig();
+
+      expect(mockDebug).toHaveBeenCalled();
+    });
+
+    it('should log info message after config init', async () => {
+      const mockInfo = vi.fn();
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: mockInfo,
+          warn: vi.fn(),
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const { initConfig } = await import('../../../src/config/loader.js');
+      await initConfig(true);
+
+      expect(mockInfo).toHaveBeenCalledWith(expect.stringContaining('Configuration file created'));
+    });
+
+    it('should log warning when config already exists', async () => {
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(configFile, '{}');
+
+      const mockWarn = vi.fn();
+
+      vi.doMock('../../../src/encryption/index.js', () => ({
+        encryptionService: {
+          isInitialized: vi.fn(() => false),
+        },
+        secureConfigManager: {
+          encryptConfig: vi.fn((config) => config),
+          decryptConfig: vi.fn((config) => config),
+        },
+      }));
+
+      vi.doMock('../../../src/utils/logger.js', () => ({
+        getLogger: () => ({
+          debug: vi.fn(),
+          info: vi.fn(),
+          warn: mockWarn,
+          error: vi.fn(),
+        }),
+      }));
+
+      vi.resetModules();
+
+      const { initConfig } = await import('../../../src/config/loader.js');
+      await initConfig(false);
+
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining('already exists'));
     });
   });
 });

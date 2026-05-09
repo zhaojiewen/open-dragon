@@ -93,7 +93,9 @@ export const COMMAND_REGISTRY: CommandMeta[] = [
   {
     name: 'ask',
     aliases: [],
-    description: 'Require confirmation for all dangerous tools',
+    description: 'Require confirmation for dangerous tools',
+    usage: '[on|off]',
+    subCommands: ['on', 'off'],
     category: 'provider',
   },
 

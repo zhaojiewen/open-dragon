@@ -1,8 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EncryptionService, SecureConfigManager } from '../../../src/encryption/index.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import * as crypto from 'crypto';
+
+// Mock the logger module
+vi.mock('../../../src/utils/logger.js', () => ({
+  getLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+// Import encryption module
+import { EncryptionService, SecureConfigManager } from '../../../src/encryption/index.js';
 
 describe('EncryptionService', () => {
   let encryption: EncryptionService;
@@ -17,6 +30,34 @@ describe('EncryptionService', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  describe('constructor', () => {
+    it('should use provided keyPath', () => {
+      const customPath = '/custom/path/.key';
+      const service = new EncryptionService(customPath);
+      expect((service as any).keyPath).toBe(customPath);
+    });
+
+    it('should use default keyPath when none provided', () => {
+      const service = new EncryptionService();
+      const expectedPath = path.join(process.env.HOME || os.homedir(), '.dragon', '.key');
+      expect((service as any).keyPath).toBe(expectedPath);
+    });
+
+    it('should use os.homedir when HOME env is not set', () => {
+      const originalHome = process.env.HOME;
+      delete process.env.HOME;
+
+      const service = new EncryptionService();
+      const expectedPath = path.join(os.homedir(), '.dragon', '.key');
+      expect((service as any).keyPath).toBe(expectedPath);
+
+      // Restore HOME
+      if (originalHome) {
+        process.env.HOME = originalHome;
+      }
+    });
   });
 
   describe('initialize', () => {
@@ -78,6 +119,24 @@ describe('EncryptionService', () => {
       await encryption2.initialize();
       expect(encryption2.isInitialized()).toBe(true);
     });
+
+    it('should throw error when key file is encrypted but no password provided', async () => {
+      // First initialize with password to create encrypted key file
+      await encryption.initialize('test-password');
+
+      // Create new encryption service and try to initialize without password
+      const encryption2 = new EncryptionService(keyPath);
+      await expect(encryption2.initialize()).rejects.toThrow('Master key file appears encrypted');
+    });
+
+    it('should throw error when wrong password is used for encrypted key', async () => {
+      // First initialize with password to create encrypted key file
+      await encryption.initialize('correct-password');
+
+      // Create new encryption service and try with wrong password
+      const encryption2 = new EncryptionService(keyPath);
+      await expect(encryption2.initialize('wrong-password')).rejects.toThrow();
+    });
   });
 
   describe('encrypt/decrypt', () => {
@@ -135,6 +194,33 @@ describe('EncryptionService', () => {
       expect(() => encryption.decrypt('invalid-encrypted-data')).toThrow();
     });
 
+    it('should throw error for unsupported encryption format version', async () => {
+      const plaintext = 'secret';
+      const ciphertext = encryption.encrypt(plaintext);
+
+      // Manually tamper with the version byte (position 3, after "DRA" magic)
+      const data = Buffer.from(ciphertext, 'base64');
+      // Change version byte to a future version (e.g., 99)
+      data[3] = 99;
+      const tamperedCiphertext = data.toString('base64');
+
+      expect(() => encryption.decrypt(tamperedCiphertext)).toThrow('Unsupported encryption format version');
+    });
+
+    it('should throw error for corrupted auth tag', async () => {
+      const plaintext = 'secret';
+      const ciphertext = encryption.encrypt(plaintext);
+
+      // Tamper with the auth tag
+      const data = Buffer.from(ciphertext, 'base64');
+      // Corrupt the auth tag (which is at position PREFIX_LENGTH + IV_LENGTH)
+      const authTagStart = 4 + 16; // PREFIX_LENGTH + IV_LENGTH
+      data[authTagStart] = data[authTagStart] ^ 0xFF;
+      const tamperedCiphertext = data.toString('base64');
+
+      expect(() => encryption.decrypt(tamperedCiphertext)).toThrow();
+    });
+
     it('should throw error when decrypting with wrong key', async () => {
       const plaintext = 'secret-data';
       const ciphertext = encryption.encrypt(plaintext);
@@ -186,10 +272,49 @@ describe('EncryptionService', () => {
       expect(encryption.isEncrypted('')).toBe(false);
     });
 
+    it('should return false for invalid base64 that throws on decode', () => {
+      // This base64 string will decode but not contain valid UTF-8
+      // and will fail the magic header check
+      expect(encryption.isEncrypted('not-valid-base64!!!')).toBe(false);
+    });
+
+    it('should catch unexpected errors and return false', async () => {
+      // Force an error by making hasValidPrefix throw
+      // We do this by creating a malformed object that looks like an encrypted value
+      // but will fail when processed
+      const originalHasValidPrefix = Object.getPrototypeOf(encryption).hasValidPrefix;
+
+      // Create a spy that throws
+      const spy = vi.spyOn(Object.getPrototypeOf(encryption) as any, 'hasValidPrefix')
+        .mockImplementationOnce(() => {
+          throw new Error('Unexpected error');
+        });
+
+      try {
+        // Create a valid encrypted value first
+        const encrypted = encryption.encrypt('test');
+        // The spy will make hasValidPrefix throw
+        const result = encryption.isEncrypted(encrypted);
+        expect(result).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('should handle base64-like strings correctly', () => {
       // A proper base64 string that's too short
       const shortBase64 = Buffer.from('abc').toString('base64');
       expect(encryption.isEncrypted(shortBase64)).toBe(false);
+    });
+
+    it('should return false for data with wrong magic header', () => {
+      // Create a valid base64 string with wrong magic header
+      const fakeData = Buffer.concat([
+        Buffer.from([0x00, 0x00, 0x00]), // Wrong magic
+        Buffer.from([1]), // Version
+        Buffer.alloc(32), // Some random data
+      ]);
+      expect(encryption.isEncrypted(fakeData.toString('base64'))).toBe(false);
     });
   });
 
@@ -201,6 +326,38 @@ describe('EncryptionService', () => {
     it('should return true after initialization', async () => {
       await encryption.initialize();
       expect(encryption.isInitialized()).toBe(true);
+    });
+  });
+
+  describe('timingSafeEqual', () => {
+    it('should return true for equal buffers', () => {
+      const buf1 = Buffer.from('test-data');
+      const buf2 = Buffer.from('test-data');
+      expect(EncryptionService.timingSafeEqual(buf1, buf2)).toBe(true);
+    });
+
+    it('should return false for different buffers', () => {
+      const buf1 = Buffer.from('test-data');
+      const buf2 = Buffer.from('different');
+      expect(EncryptionService.timingSafeEqual(buf1, buf2)).toBe(false);
+    });
+
+    it('should return false for buffers of different lengths', () => {
+      const buf1 = Buffer.from('short');
+      const buf2 = Buffer.from('longer-string');
+      expect(EncryptionService.timingSafeEqual(buf1, buf2)).toBe(false);
+    });
+
+    it('should return false for empty vs non-empty buffer', () => {
+      const buf1 = Buffer.alloc(0);
+      const buf2 = Buffer.from('data');
+      expect(EncryptionService.timingSafeEqual(buf1, buf2)).toBe(false);
+    });
+
+    it('should return true for empty buffers', () => {
+      const buf1 = Buffer.alloc(0);
+      const buf2 = Buffer.alloc(0);
+      expect(EncryptionService.timingSafeEqual(buf1, buf2)).toBe(true);
     });
   });
 
@@ -247,6 +404,18 @@ describe('SecureConfigManager', () => {
 
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  describe('constructor', () => {
+    it('should use provided encryption service', () => {
+      const customManager = new SecureConfigManager(encryption);
+      expect((customManager as any).encryption).toBe(encryption);
+    });
+
+    it('should create default encryption service when none provided', () => {
+      const defaultManager = new SecureConfigManager();
+      expect((defaultManager as any).encryption).toBeInstanceOf(EncryptionService);
+    });
   });
 
   describe('encryptConfig', () => {
@@ -410,19 +579,24 @@ describe('SecureConfigManager', () => {
     });
 
     it('should log warning when decryption fails', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // Create a config with a value that looks like encrypted (has DRA magic header)
+      // but has invalid/corrupted data that will fail decryption
+      const fakeEncrypted = Buffer.concat([
+        Buffer.from([0x44, 0x52, 0x41]), // DRA magic
+        Buffer.from([1]), // Version
+        Buffer.alloc(32), // Some random data to make it look valid
+      ]).toString('base64');
 
-      // Create a config with a value that looks like base64 but can't be decrypted
       const config = {
-        apiKey: 'YW55VGhpbmdUaGF0SW5WYWxpZEJhc2U2NEVuY29kZWRTdHJpbmc=', // Valid base64 but not encrypted
+        apiKey: fakeEncrypted,
       };
 
+      // This should trigger the catch block in decryptConfig (line 307)
+      // which logs a warning and preserves the original value
       const decrypted = manager.decryptConfig(config);
 
-      // Should preserve the value and log warning
-      expect(decrypted.apiKey).toBe('YW55VGhpbmdUaGF0SW5WYWxpZEJhc2U2NEVuY29kZWRTdHJpbmc=');
-
-      warnSpy.mockRestore();
+      // Should preserve the value when decryption fails
+      expect(decrypted.apiKey).toBe(fakeEncrypted);
     });
   });
 
